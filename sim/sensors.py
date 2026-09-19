@@ -1,22 +1,26 @@
 """Chemosensory system: the creature's ONLY food sense is scent."""
 
+import math
 from dataclasses import dataclass
 from math import cos, sin
 
 from .creature import Body, Vec
 
-PLUME_SPREAD = 30.0  # world units^2: how fast scent dilutes
-RECEPTOR_AHEAD = 2.0  # receptor offset straight ahead of the body
-RECEPTOR_SIDE = 1.5  # forward and lateral offsets of the side receptors
+PLUME_SPREAD = 8.0  # world units: how fast scent dilutes (linear in d, not d^2:
+# a quadratic plume saturates near the food, the gradient flattens and then
+# inverts, and the creature orbits a piece it can almost touch)
+RECEPTOR_AHEAD = 0.8  # receptor offset straight ahead of the body; must be
+# smaller than EAT_RADIUS (1.5), or the "nose" senses past the "mouth"
+RECEPTOR_SIDE = 0.6  # forward and lateral offsets of the side receptors
 
 GRAD_RISING, GRAD_FALLING, GRAD_FLAT = 0, 1, 2
 STEER_LEFT, STEER_RIGHT, STEER_SYMMETRIC = 0, 1, 2
 N_GRAD, N_STEER, N_INTENSITY = 3, 3, 4
 N_STATES = N_GRAD * N_STEER * N_INTENSITY
 
-_RISE_RATIO = 1.01  # ahead must exceed here by 1% to count as "rising"
-_STEER_RATIO = 1.05  # one side must exceed the other by 5% to count as steering
-_INTENSITY_THRESHOLDS = (0.5, 0.15, 0.04)
+_RISE_RATIO = 1.005  # ahead must exceed here by 0.5% to count as "rising"
+_STEER_RATIO = 1.03  # one side must exceed the other by 3% to count as steering
+_INTENSITY_THRESHOLDS = (0.75, 0.55, 0.35)  # linear plume: 0.75 ~ d<2.7, 0.55 ~ d<6, 0.35 ~ d<13
 
 
 @dataclass(frozen=True)
@@ -43,9 +47,14 @@ class Reading:
 
 
 def scent_at(point: Vec, food: list[Vec]) -> float:
-    """Scent concentration at a point: sum of plumes from all food."""
+    """Scent concentration at a point: sum of plumes from all food.
+
+    Falls off linearly in distance (1 / (1 + d/k)): contrast between two
+    nearby points stays proportional to their distance gap all the way to
+    the source. A quadratic law saturates, killing the contrast close-in.
+    """
     return sum(
-        1.0 / (1.0 + ((f.x - point.x) ** 2 + (f.y - point.y) ** 2) / PLUME_SPREAD)
+        1.0 / (1.0 + math.hypot(f.x - point.x, f.y - point.y) / PLUME_SPREAD)
         for f in food
     )
 
