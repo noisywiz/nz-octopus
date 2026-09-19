@@ -1,21 +1,18 @@
-"""TUI viewer: watch the octopus learn in your terminal."""
+"""TUI viewer: watch the creature learn in your terminal.
 
-import argparse
-import math
+Rendering only — all simulation and session logic lives in `sim`.
+"""
+
 import time
-from pathlib import Path
 
-from sim import QBrain, World, DIRS
+from rich.console import Console, Group
+from rich.live import Live
+from rich.text import Text
 
-try:
-    import rich.live
-    import rich.table
-    import rich.text
-    from rich.console import Console
-except ImportError as e:
-    raise SystemExit("rich is required: pip install rich") from e
-
-BRAIN_PATH = Path(__file__).resolve().parent / "brain.json"
+from sim import DIR_ARROW_BY_SECTOR, N_DIRECTIONS, World
+from sim import session
+from sim.geometry import angle_sector
+from sim.world import WIDTH, HEIGHT
 
 DEFAULT_CELL = "grey19"
 WALL_CELL = "grey42"
@@ -26,6 +23,7 @@ STARVING_CELL = "color(57)"
 
 
 def mood_style(hunger: float) -> str:
+    """Cell color by hunger level."""
     if hunger < 33:
         return HAPPY_CELL
     if hunger < 66:
@@ -33,102 +31,102 @@ def mood_style(hunger: float) -> str:
     return STARVING_CELL
 
 
-def render_frame(world: World, width: int, height: int) -> rich.text.Text:
-    """Draw the tank 1:1: one world unit = one terminal cell."""
-    grid = [[" " for _ in range(width)] for _ in range(height)]
-    styles = [[DEFAULT_CELL for _ in range(width)] for _ in range(height)]
-
-    # walls
+def frame_grid(world: World, width: int, height: int) -> list[list[str]]:
+    """Tank cells as characters: walls, food, trail and the creature."""
+    grid = [[" "] * width for _ in range(height)]
     for x in range(width):
-        for y in (0, height - 1):
-            grid[y][x] = "─"
-            styles[y][x] = WALL_CELL
+        grid[0][x] = grid[height - 1][x] = "─"
     for y in range(height):
-        for x in (0, width - 1):
-            grid[y][x] = "│"
-            styles[y][x] = WALL_CELL
-    grid[0][0] = grid[0][width - 1] = "┌"
-    grid[height - 1][0] = grid[height - 1][width - 1] = "└"
-    styles[0][0] = styles[0][width - 1] = styles[height - 1][0] = styles[height - 1][width - 1] = WALL_CELL
+        grid[y][0] = grid[y][width - 1] = "│"
+    grid[0][0] = grid[height - 1][width - 1] = "└"
+    grid[0][width - 1] = "┘"
+    grid[height - 1][0] = "┌"
+    grid[height - 1][width - 1] = "┐"
 
-    # food
-    for f in world.foods:
-        px, py = round(f.x), round(f.y)
+    for f in world.food:
+        px, py = round(f.pos.x), round(f.pos.y)
         if 0 <= px < width and 0 <= py < height:
             grid[py][px] = "◆"
-            styles[py][px] = FOOD_CELL
-
-    # trail: fading path of recent positions
-    for i, (tx, ty) in enumerate(world.trail):
-        px, py = round(tx), round(ty)
+    for p in world.trail:
+        px, py = round(p.x), round(p.y)
         if 0 <= px < width and 0 <= py < height and grid[py][px] == " ":
             grid[py][px] = "·"
-            styles[py][px] = mood_style(world.hunger)
-
-    # octopus
-    px, py = round(world.octopus_x), round(world.octopus_y)
+    px, py = round(world.position.x), round(world.position.y)
     if 0 <= px < width and 0 <= py < height:
-        sector = int((world.octopus_dir + math.pi / DIRS) // (2 * math.pi / DIRS)) % DIRS
-        arrows_by_sector = ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"]
-        grid[py][px] = arrows_by_sector[sector]
-        styles[py][px] = mood_style(world.hunger)
+        sector = angle_sector(world.heading, N_DIRECTIONS)
+        grid[py][px] = DIR_ARROW_BY_SECTOR[sector]
+    return grid
 
-    frame = rich.text.Text()
-    for row_cells, row_styles in zip(grid, styles):
-        for cell, style in zip(row_cells, row_styles):
+
+def render_frame(world: World, width: int, height: int) -> Text:
+    """Colorize the grid and flatten it into one rich Text."""
+    grid = frame_grid(world, width, height)
+    frame = Text()
+    for y, row in enumerate(grid):
+        for x, cell in enumerate(row):
+            style = cell_style(world, grid, x, y)
             frame.append(cell, style=style)
         frame.append("\n")
     return frame
 
 
-def stats_panel(world: World) -> rich.text.Text:
-    hunger_bar_len = 20
-    filled = int(world.hunger / 100 * hunger_bar_len)
-    bar = "▰" * filled + "▱" * (hunger_bar_len - filled)
-    txt = rich.text.Text()
+def cell_style(world: World, grid: list[list[str]], x: int, y: int) -> str:
+    """Style of one cell based on what it contains."""
+    cell = grid[y][x]
+    if cell in "┌┐└┘─│":
+        return WALL_CELL
+    if cell == "◆":
+        return FOOD_CELL
+    if cell == "·":
+        return mood_style(world.hunger)
+    if cell != " ":
+        return mood_style(world.hunger)  # the creature itself
+    return DEFAULT_CELL
+
+
+def stats_panel(world: World) -> Text:
+    """Hunger bar and lifetime counters under the tank."""
+    bar_len = 20
+    filled = int(world.hunger / 100 * bar_len)
+    bar = "▰" * filled + "▱" * (bar_len - filled)
+    txt = Text()
     txt.append(" hunger ", style="bold")
     txt.append(f"{bar} {world.hunger:5.1f}\n", style=mood_style(world.hunger))
     txt.append(f" ticks: {world.ticks}   food eaten: {world.food_eaten}   "
-               f"wall bumps: {world.wall_bumps}\n")
-    txt.append(f" avg reward (500t): {world.recent_avg_reward:+.3f}   "
+               f"wall bumps: {world.wall_bumps}   starvations: {world.starvations}\n")
+    txt.append(f" avg reward ({len(world.recent_rewards)}t): "
+               f"{world.recent_avg_reward:+.3f}   "
                f"experience: {world.brain.experience}   "
                f"known states: {world.brain.known_states}\n")
-    txt.append(f" epsilon (curiosity): {world.brain.epsilon:.3f}")
+    txt.append(f" epsilon (curiosity): {world.brain.config.epsilon:.3f}")
     return txt
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Octopus TUI")
-    parser.add_argument("--speed", type=int, default=2, help="sim ticks per frame")
-    parser.add_argument("--fps", type=float, default=8.0, help="render fps")
-    parser.add_argument("--fresh", action="store_true", help="start with empty brain")
-    args = parser.parse_args()
-
+def main() -> None:
+    """Entry point: parse args, load the brain, run the render loop, save."""
+    args = session.parse_args("Creature TUI", default_speed=2)
     console = Console()
-    if args.fresh and BRAIN_PATH.exists():
-        BRAIN_PATH.unlink()
-    brain = QBrain(n_states=0, n_actions=0, load_path=BRAIN_PATH)
-    world = World(brain)
+    brain = session.open_brain(args.fresh)
+    world = World(brain=brain)
 
-    frame_interval = 1.0 / args.fps
-    with rich.live.Live(console=console, refresh_per_second=args.fps, screen=True) as live:
-        try:
+    speed = max(1, args.speed)
+    frame_interval = 1.0 / 8.0
+    try:
+        with Live(console=console, refresh_per_second=8, screen=True) as live:
             while True:
                 frame_start = time.monotonic()
-                for _ in range(args.speed):
+                for _ in range(speed):
                     world.step()
-                # tank is 80x30 world units -> draw 1:1, need a big enough terminal
-                frame = render_frame(world, int(World.WIDTH), int(World.HEIGHT))
-                live.update(rich.console.Group(stats_panel(world), frame))
-                # actually respect fps: the loop would otherwise spin at max speed
+                frame = render_frame(world, int(WIDTH), int(HEIGHT))
+                live.update(Group(stats_panel(world), frame))
                 elapsed = time.monotonic() - frame_start
                 if elapsed < frame_interval:
                     time.sleep(frame_interval - elapsed)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            brain.save(BRAIN_PATH)
-            console.print(f"[green]Brain saved to {BRAIN_PATH}[/green]")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        session.save_brain(brain)
+        console.print(f"[green]Brain saved to {session.BRAIN_PATH}[/green]")
 
 
 if __name__ == "__main__":

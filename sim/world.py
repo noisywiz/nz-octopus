@@ -1,160 +1,194 @@
-"""Aquarium world: a continuous 2D space with food, walls and one octopus."""
+"""Aquarium world: ties brain, sensors, movement and metabolism into one loop.
 
-import math
+The World class is a thin orchestrator; every actual decision is a pure
+function in sibling modules, so the logic stays testable without pygame.
+"""
+
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
+from . import creature as cr
+from . import metabolism as meta
+from . import rewards as rw
+from . import sensors as sn
 from .brain import QBrain
+from .geometry import distance
 
-# --- discrete sensor encoding -------------------------------------------------
-DIRS = 8  # 8 directions around the octopus
+WIDTH, HEIGHT = 80.0, 30.0
 
 
-def dir_index(angle: float) -> int:
-    """Map an angle (radians) to one of 8 sectors (0..7)."""
-    sector = int((angle + math.pi / DIRS) // (2 * math.pi / DIRS)) % DIRS
-    return sector
+def screen_size() -> tuple[float, float]:
+    """Tank dimensions as (width, height), for renderers."""
+    return WIDTH, HEIGHT
+WALL_MARGIN = 1.0
+EAT_RADIUS = 1.5
+N_FOOD = 6
+FOOD_ENERGY = 40.0
+FOOD_SPAWN_PAD = 3.0  # food never spawns this close to a wall
+REWARD_WINDOW = 500  # ticks in the rolling average-reward window
+
+
+@dataclass(frozen=True)
+class Food:
+    """A piece of food: a position and the energy it restores."""
+
+    pos: cr.Vec
+    energy: float = FOOD_ENERGY
 
 
 @dataclass
-class Food:
-    x: float
-    y: float
-    energy: float = 12.0
-
-
 class World:
-    WIDTH = 80.0
-    HEIGHT = 30.0
-    VISION = 25.0     # how far the octopus can sense food
-    EAT_RADIUS = 1.5
+    """One creature in one tank. step() advances the simulation one tick."""
 
-    HUNGER_LEVELS = 5
+    brain: QBrain = field(default_factory=lambda: QBrain(sn.N_STATES, cr.N_DIRECTIONS))
+    rng: random.Random = field(default_factory=random.Random)
+    creature: cr.Creature = field(init=False)
+    food: list[Food] = field(init=False)
+    ticks: int = 0
+    food_eaten: int = 0
+    wall_bumps: int = 0
+    starvations: int = 0
+    episode_reward: float = 0.0
+    recent_rewards: list[float] = field(default_factory=list)
 
-    def __init__(self, brain: QBrain | None = None, n_food: int = 4):
-        self.n_food = n_food
-        # state space: food dir (9: 8 dirs + none) * dist (3). Hunger is felt
-        # through rewards, not encoded in the state — fewer states, faster learning.
-        n_states = (DIRS + 1) * 3
-        n_actions = DIRS + 1  # 8 directions + rest
-        if brain is None:
-            brain = QBrain(n_states, n_actions)
-        elif brain.n_actions == 0:
-            brain.n_states, brain.n_actions = n_states, n_actions
-        self.brain = brain
-        self.reset()
+    def __post_init__(self) -> None:
+        self.creature = self._spawn_creature()
+        self.food = [self._spawn_food() for _ in range(N_FOOD)]
 
-    def reset(self, keep_stats: bool = False):
-        self.octopus_x = self.WIDTH / 2
-        self.octopus_y = self.HEIGHT / 2
-        self.octopus_dir = random.uniform(0, 2 * math.pi)
-        self.hunger = 50.0          # 0 = full, 100 = starving
-        self.foods = [self._spawn_food() for _ in range(self.n_food)]
-        self.last_state = self.sense()
-        self.ticks = 0
-        self.episode_reward = 0.0
-        self.trail: list[tuple[float, float]] = []   # recent positions, for rendering
-        self.recent_rewards: list[float] = []   # rolling window of rewards
-        if not keep_stats:
-            # lifetime counters: this creature is one and only, stats span its whole life
-            self.food_eaten = 0
-            self.wall_bumps = 0
-            self.starvations = 0
+    # --- construction helpers -------------------------------------------------
 
-    def _spawn_food(self) -> Food:
-        return Food(
-            x=random.uniform(3, self.WIDTH - 3),
-            y=random.uniform(3, self.HEIGHT - 3),
+    def _spawn_creature(self) -> cr.Creature:
+        """A rested creature in the middle, facing a random direction."""
+        return cr.Creature(
+            pos=cr.Vec(WIDTH / 2, HEIGHT / 2),
+            heading=self.rng.uniform(0, 6.283185307179586),
+            hunger=30.0,
+            starving=0.0,
         )
 
-    # --- senses ---------------------------------------------------------------
+    def _spawn_food(self) -> Food:
+        """Random position, kept away from the walls."""
+        pad = FOOD_SPAWN_PAD
+        return Food(pos=cr.Vec(
+            x=self.rng.uniform(pad, WIDTH - pad),
+            y=self.rng.uniform(pad, HEIGHT - pad),
+        ))
 
-    def sense(self) -> int:
-        """Compress the world into one discrete state index."""
-        nearest, dist = self._nearest_food()
-        if nearest is None or dist > self.VISION:
-            food_part = 0            # "don't see anything"
-            dist_part = 0
-        else:
-            food_part = 1 + dir_index(math.atan2(nearest.y - self.octopus_y,
-                                                 nearest.x - self.octopus_x))
-            dist_part = 0 if dist < self.VISION / 3 else (1 if dist < 2 * self.VISION / 3 else 2)
-        return food_part * 3 + dist_part
+    # --- senses ----------------------------------------------------------------
 
-    def _nearest_food(self) -> tuple[Food | None, float]:
-        best, best_d = None, float("inf")
-        for f in self.foods:
-            d = math.hypot(f.x - self.octopus_x, f.y - self.octopus_y)
-            if d < best_d:
-                best, best_d = f, d
-        return best, best_d
+    def food_points(self) -> list[cr.Vec]:
+        """Positions of all food, for the scent field."""
+        return [f.pos for f in self.food]
 
-    # --- simulation step --------------------------------------------------------
+    def read_sensors(self) -> sn.Reading:
+        """The creature's current discrete perception."""
+        body = self.creature.body
+        return sn.read(sn.receptor_readings(body, self.food_points()))
 
-    def step(self):
-        state = self.last_state
-        action = self.brain.act(state)
+    # --- simulation step ---------------------------------------------------------
 
-        # perform action
-        if action < DIRS:
-            self.octopus_dir = action * (2 * math.pi / DIRS)
-            speed = 0.8
-        else:
-            speed = 0.0  # rest
-        self.octopus_x += math.cos(self.octopus_dir) * speed
-        self.octopus_y += math.sin(self.octopus_dir) * speed
-        if speed > 0:
-            self.trail.append((self.octopus_x, self.octopus_y))
-            if len(self.trail) > 8:
-                self.trail.pop(0)
+    def step(self) -> None:
+        """One tick: act, move, collide, eat, metabolize, learn."""
+        state = self.read_sensors().index()
+        action = self.brain.act(state, self.rng)
 
-        # walls: sliding along a wall is fine, only a real bump (moving into it) hurts
-        reward = 0.0
-        bumped = False
-        if not (1 < self.octopus_x < self.WIDTH - 1):
-            self.octopus_x = min(max(self.octopus_x, 1), self.WIDTH - 1)
-            if abs(math.cos(self.octopus_dir)) > 0.01:
-                bumped = True
-        if not (1 < self.octopus_y < self.HEIGHT - 1):
-            self.octopus_y = min(max(self.octopus_y, 1), self.HEIGHT - 1)
-            if abs(math.sin(self.octopus_dir)) > 0.01:
-                bumped = True
-        if bumped:
-            reward -= 2.0
-            self.wall_bumps += 1
+        cr.move(self.creature, action)
+        wall_reward = self._handle_walls()
+        food_reward = self._handle_eating()
+        metabolic = self._handle_metabolism()
 
-        # eating
-        for f in list(self.foods):
-            if math.hypot(f.x - self.octopus_x, f.y - self.octopus_y) < self.EAT_RADIUS:
-                self.foods.remove(f)
-                self.foods.append(self._spawn_food())
-                self.hunger = max(0.0, self.hunger - f.energy)
-                reward += 10.0
-                self.food_eaten += 1
-
-        # metabolism: starving hurts, and full starvation kills (hard reset = big penalty).
-        # Only penalize the *growth* of hunger, not its absolute level, otherwise
-        # the octopus is better off staying idle in a corner than hunting.
-        prev_hunger = self.hunger
-        self.hunger = min(100.0, self.hunger + 0.15)
-        reward -= 0.3 * (self.hunger - prev_hunger)
-        if self.hunger >= 100.0:
-            reward -= 50.0
-            self.starvations += 1
-            self.reset(keep_stats=True)
-
-        next_state = self.sense()
-        self.brain.learn(state, action, reward, next_state)
-        self.last_state = next_state
+        reward = rw.combine(food_reward, wall_reward, metabolic)
+        next_state = self.read_sensors().index()
+        self.brain.learn(state, action, reward.total, next_state)
 
         self.ticks += 1
-        self.episode_reward += reward
+        self.episode_reward += reward.total
+        self._remember(reward.total)
+
+    def _handle_walls(self) -> float:
+        """Clamp position, count first-contact bumps, run the escape reflex."""
+        c = self.creature
+        c.pos = cr.Vec(
+            x=min(WIDTH - WALL_MARGIN, max(WALL_MARGIN, c.pos.x)),
+            y=min(HEIGHT - WALL_MARGIN, max(WALL_MARGIN, c.pos.y)),
+        )
+        at_v, at_h = cr.at_wall(c.pos, WALL_MARGIN, WIDTH, HEIGHT)
+        bumped = (at_v or at_h) and not c.bumping
+        c.bumping = at_v or at_h
+        if bumped:
+            self.wall_bumps += 1
+        if at_v or at_h:
+            cr.wall_escape(c, WALL_MARGIN, WIDTH, HEIGHT)
+        return rw.wall_bump(bumped)
+
+    def _handle_eating(self) -> float:
+        """Eat every piece of food within reach; each respawns elsewhere."""
+        ate = False
+        for i, f in enumerate(self.food):
+            if cr.touch(self.creature.pos, f.pos, EAT_RADIUS):
+                self.food[i] = self._spawn_food()
+                self.creature.hunger = meta.fed(self.creature.hunger, f.energy)
+                self.food_eaten += 1
+                ate = True
+        return rw.food_reward(ate)
+
+    def _handle_metabolism(self) -> meta.MetabolicReport:
+        """Grow hunger, track weakness, penalize crossing the starve threshold."""
+        c = self.creature
+        before = c.hunger
+        c.hunger = meta.grown(before)
+        c.starving = meta.starving_factor(c.hunger)
+        event = meta.crosses_starve(before, c.hunger)
+        if event:
+            self.starvations += 1
+        return meta.metabolize(before, event)
+
+    def _remember(self, reward: float) -> None:
+        """Keep the rolling reward window bounded."""
         self.recent_rewards.append(reward)
-        if len(self.recent_rewards) > 500:
-            self.recent_rewards.pop(0)
+        if len(self.recent_rewards) > REWARD_WINDOW:
+            del self.recent_rewards[:-REWARD_WINDOW]
+
+    # --- stats -----------------------------------------------------------------
 
     @property
     def recent_avg_reward(self) -> float:
+        """Mean reward over the last REWARD_WINDOW ticks (0 if empty)."""
         if not self.recent_rewards:
             return 0.0
         return sum(self.recent_rewards) / len(self.recent_rewards)
+
+    @property
+    def trail(self) -> list[cr.Vec]:
+        """Recent positions, for rendering."""
+        return self.creature.trail
+
+    @property
+    def position(self) -> cr.Vec:
+        """Where the creature is right now."""
+        return self.creature.pos
+
+    @property
+    def heading(self) -> float:
+        """Where the creature is facing right now."""
+        return self.creature.heading
+
+    @property
+    def hunger(self) -> float:
+        """Current hunger in 0..100."""
+        return self.creature.hunger
+
+    @property
+    def starving(self) -> float:
+        """Weakness factor in 0..1 (drives gray color and slowness)."""
+        return self.creature.starving
+
+    def food_distances(self) -> list[float]:
+        """Distance from the creature to every piece of food."""
+        return [distance(self.creature.pos.x, self.creature.pos.y, f.pos.x, f.pos.y)
+                for f in self.food]
+
+    def save_brain(self, path: Path) -> None:
+        """Persist the Q-table."""
+        self.brain.save(path)

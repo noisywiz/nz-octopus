@@ -2,63 +2,93 @@
 
 import json
 import random
+from dataclasses import dataclass, field
 from pathlib import Path
 
+SAVE_FORMAT = 2  # bump when the state encoding changes -> old saves are rejected
 
+
+@dataclass
+class BrainConfig:
+    """Learning hyperparameters, all tuned by hand over Development sessions."""
+
+    lr: float = 0.3
+    lr_min: float = 0.05
+    lr_decay_horizon: int = 20000  # updates after which lr halves toward lr_min
+    gamma: float = 0.9
+    epsilon: float = 1.0
+    epsilon_min: float = 0.10
+    epsilon_decay: float = 0.9999
+
+
+@dataclass
 class QBrain:
-    def __init__(self, n_states: int, n_actions: int, load_path: Path | None = None):
-        self.n_states = n_states
-        self.n_actions = n_actions
-        self.lr = 0.2          # learning rate (decays as experience grows)
-        self.lr_min = 0.02
-        self.gamma = 0.9       # discount: how much it cares about the future
-        self.epsilon = 1.0     # exploration: 1.0 = fully random at birth
-        self.epsilon_min = 0.02
-        self.epsilon_decay = 0.9995
+    """A single Q-table plus the ε-greedy / decaying-lr update rule."""
 
-        self.q: dict[int, list[float]] = {}
-        self.experience = 0    # total learning updates ever made
-        if load_path and load_path.exists():
-            self.load(load_path)
+    n_states: int
+    n_actions: int
+    config: BrainConfig = field(default_factory=BrainConfig)
+    q: dict[int, list[float]] = field(default_factory=dict)
+    experience: int = 0
 
-    def _row(self, state: int) -> list[float]:
+    def row(self, state: int) -> list[float]:
+        """Q-values for one state, created zero-filled on first touch."""
         row = self.q.get(state)
         if row is None:
             row = [0.0] * self.n_actions
             self.q[state] = row
         return row
 
-    def act(self, state: int) -> int:
-        if random.random() < self.epsilon:
-            return random.randrange(self.n_actions)
-        row = self._row(state)
+    def act(self, state: int, rng: random.Random) -> int:
+        """ε-greedy action; ties in the greedy branch are broken randomly."""
+        cfg = self.config
+        if rng.random() < cfg.epsilon:
+            return rng.randrange(self.n_actions)
+        row = self.row(state)
         best = max(row)
-        # break ties randomly so the creature doesn't get stuck in habits
-        return random.choice([a for a, v in enumerate(row) if v == best])
+        return rng.choice([a for a, v in enumerate(row) if v == best])
 
-    def learn(self, state: int, action: int, reward: float, next_state: int):
-        row = self._row(state)
-        next_max = max(self._row(next_state))
-        lr = max(self.lr_min, self.lr / (1.0 + self.experience / 20000))
-        row[action] += lr * (reward + self.gamma * next_max - row[action])
+    def learning_rate(self) -> float:
+        """Effective lr for the current update, decaying with experience."""
+        cfg = self.config
+        decayed = cfg.lr / (1.0 + self.experience / cfg.lr_decay_horizon)
+        return max(cfg.lr_min, decayed)
+
+    def learn(self, state: int, action: int, reward: float, next_state: int) -> None:
+        """One Q-update: also decays lr (with experience) and epsilon (per update)."""
+        cfg = self.config
+        row = self.row(state)
+        target = reward + cfg.gamma * max(self.row(next_state))
+        row[action] += self.learning_rate() * (target - row[action])
         self.experience += 1
-        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+        cfg.epsilon = max(cfg.epsilon_min, cfg.epsilon * cfg.epsilon_decay)
 
     @property
     def known_states(self) -> int:
+        """How many distinct states the creature has ever observed."""
         return len(self.q)
 
-    def save(self, path: Path):
+    def save(self, path: Path) -> None:
+        """Persist the table; tagged with a format version, not per-world params."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "epsilon": self.epsilon,
+        payload = {
+            "format": SAVE_FORMAT,
+            "epsilon": self.config.epsilon,
             "experience": self.experience,
             "q": {str(k): v for k, v in self.q.items()},
         }
-        path.write_text(json.dumps(data))
+        path.write_text(json.dumps(payload))
 
-    def load(self, path: Path):
+    @classmethod
+    def load(cls, path: Path, n_states: int, n_actions: int) -> "QBrain":
+        """Rebuild a brain from disk; a stale save returns an empty brain instead."""
+        brain = cls(n_states=n_states, n_actions=n_actions)
+        if not path.exists():
+            return brain
         data = json.loads(path.read_text())
-        self.epsilon = data["epsilon"]
-        self.experience = data["experience"]
-        self.q = {int(k): v for k, v in data["q"].items()}
+        if data.get("format") != SAVE_FORMAT:
+            return brain  # incompatible encoding: start fresh rather than crash
+        brain.q = {int(k): list(v) for k, v in data["q"].items()}
+        brain.experience = int(data["experience"])
+        brain.config.epsilon = float(data["epsilon"])
+        return brain

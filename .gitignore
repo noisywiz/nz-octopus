@@ -1,6 +1,10 @@
+# Python
 __pycache__/
 *.pyc
 .venv/
 
-# creature's memory - lives outside version control by default
+# learned brain (runtime artifact, not source)
 brain.json
+
+# scratch previews
+preview_*.png
