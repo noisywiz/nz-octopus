@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+
+# creature's memory - lives outside version control by default
+brain.json

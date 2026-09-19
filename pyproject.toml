@@ -1,0 +1,7 @@
+[project]
+name = "nz-octopus"
+version = "0.1.0"
+description = "A single 2D octopus AI that lives and learns in an aquarium"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["rich>=13"]
