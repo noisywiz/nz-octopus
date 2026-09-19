@@ -10,7 +10,7 @@ PLUME_SPREAD = 8.0  # world units: how fast scent dilutes (linear in d, not d^2:
 # a quadratic plume saturates near the food, the gradient flattens and then
 # inverts, and the creature orbits a piece it can almost touch)
 RECEPTOR_AHEAD = 0.8  # receptor offset straight ahead of the body; must be
-# smaller than EAT_RADIUS (1.5), or the "nose" senses past the "mouth"
+# smaller than EAT_RADIUS (2.0), or the "nose" senses past the "mouth"
 RECEPTOR_SIDE = 0.6  # forward and lateral offsets of the side receptors
 
 GRAD_RISING, GRAD_FALLING, GRAD_FLAT = 0, 1, 2

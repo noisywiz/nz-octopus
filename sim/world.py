@@ -22,7 +22,7 @@ def screen_size() -> tuple[float, float]:
     """Tank dimensions as (width, height), for renderers."""
     return WIDTH, HEIGHT
 WALL_MARGIN = 1.0
-EAT_RADIUS = 1.5
+EAT_RADIUS = 2.0  # mouth with margin: near-miss arcs used to sail past food
 N_FOOD = 6
 FOOD_ENERGY = 40.0
 FOOD_SPAWN_PAD = 6.0  # food never spawns this close to a wall (angles attract camping)
@@ -90,7 +90,8 @@ class World:
 
     def step(self) -> None:
         """One tick: act, move, collide, eat, metabolize, learn."""
-        state = self.read_sensors().index()
+        reading = self.read_sensors()
+        state = reading.index()
         action = self.brain.act(state, self.rng)
 
         cr.move(self.creature, action)

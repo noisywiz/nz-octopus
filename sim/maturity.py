@@ -17,7 +17,7 @@ from .geometry import turn_toward
 from .sensors import N_STATES
 
 # Oracle kinematics — deliberately the same limits as the creature (creature.py).
-EAT_RADIUS = 1.5
+EAT_RADIUS = 2.0  # keep in sync with world.EAT_RADIUS
 TANK_WIDTH, TANK_HEIGHT = 80.0, 30.0
 SPAWN_PAD = 6.0  # keep in sync with world.FOOD_SPAWN_PAD
 
