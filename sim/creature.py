@@ -83,10 +83,15 @@ def move(creature: Creature, action: int) -> None:
 TRAIL_LENGTH = 8
 
 
-def push_off_wall(point: Vec, low: float, high: float, axis: int) -> Vec:
-    """Slide a point back inside [low, high] on one axis (0=x, 1=y)."""
-    clamped = min(high, max(low, point.x if axis == 0 else point.y))
-    return Vec(clamped, point.y) if axis == 0 else Vec(point.x, clamped)
+def push_off_wall(point: Vec, low: float, high: float, axis: int, inward: float) -> Vec:
+    """Nudge a point inside [low, high] on one axis by `inward` units.
+
+    `inward` must point away from the wall the point is touching: the caller
+    decides the sign, this function just applies and clamps it.
+    """
+    if axis == 0:
+        return Vec(min(high, max(low, point.x + inward)), point.y)
+    return Vec(point.x, min(high, max(low, point.y + inward)))
 
 
 def at_wall(point: Vec, margin: float, width: float, height: float) -> tuple[bool, bool]:
@@ -105,13 +110,13 @@ def wall_escape(creature: Creature, margin: float, width: float, height: float) 
     at_v, at_h = at_wall(creature.pos, margin, width, height)
     if at_v:
         inward = WALL_PUSH if creature.pos.x <= margin else -WALL_PUSH
-        outward = math.pi if creature.pos.x <= margin else 0.0
-        creature.pos = push_off_wall(Vec(creature.pos.x + inward, creature.pos.y), margin, width - margin, axis=0)
+        outward = 0.0 if creature.pos.x <= margin else math.pi  # 0 = +x = away from left wall
+        creature.pos = push_off_wall(creature.pos, margin, width - margin, axis=0, inward=inward)
         creature.heading = turn_toward(creature.heading, outward, WALL_TURN)
     if at_h:
         inward = WALL_PUSH if creature.pos.y <= margin else -WALL_PUSH
-        outward = -math.pi / 2 if creature.pos.y <= margin else math.pi / 2
-        creature.pos = push_off_wall(Vec(creature.pos.x, creature.pos.y + inward), margin, width - margin, axis=1)
+        outward = math.pi / 2 if creature.pos.y <= margin else -math.pi / 2  # +y is downward on screen
+        creature.pos = push_off_wall(creature.pos, margin, height - margin, axis=1, inward=inward)
         creature.heading = turn_toward(creature.heading, outward, WALL_TURN)
 
 
