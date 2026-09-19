@@ -15,7 +15,7 @@ try:
 except ImportError as e:
     raise SystemExit("rich is required: pip install rich") from e
 
-BRAIN_PATH = Path(__file__).resolve().parent.parent / "brain.json"
+BRAIN_PATH = Path(__file__).resolve().parent / "brain.json"
 
 DEFAULT_CELL = "grey19"
 WALL_CELL = "grey42"
