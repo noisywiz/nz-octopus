@@ -25,7 +25,7 @@ WALL_MARGIN = 1.0
 EAT_RADIUS = 1.5
 N_FOOD = 6
 FOOD_ENERGY = 40.0
-FOOD_SPAWN_PAD = 3.0  # food never spawns this close to a wall
+FOOD_SPAWN_PAD = 6.0  # food never spawns this close to a wall (angles attract camping)
 REWARD_WINDOW = 500  # ticks in the rolling average-reward window
 
 

@@ -40,6 +40,8 @@ class Creature:
     hunger: float
     starving: float
     bumping: bool = False
+    stall_anchor: Vec | None = None  # position STALL_WINDOW ticks ago
+    stall_ticks: int = 0  # ticks spent within STALL_RADIUS of stall_anchor
     trail: list[Vec] = field(default_factory=list)
 
     @property
@@ -101,11 +103,22 @@ def at_wall(point: Vec, margin: float, width: float, height: float) -> tuple[boo
     return at_v, at_h
 
 
+CORNER_PUSH = 0.15  # gentle draft away from a corner, on top of per-axis push
+STALL_WINDOW = 120  # ticks between displacement checks
+STALL_RADIUS = 1.5  # net displacement below this over the window = stuck
+STUCK_SURGE = 4.0  # units of the forced launch toward the center
+
+
 def wall_escape(creature: Creature, margin: float, width: float, height: float) -> None:
     """Physical reflex while touching a wall: push off + turn away.
 
     The push must be stronger than the strongest swim action, otherwise the
     policy can cancel it and the creature sticks to the wall forever.
+    Stuck detection is deliberately position-agnostic (wall, corner, or open
+    water): if net displacement over STALL_WINDOW ticks is tiny, the policy
+    is jittering in place and a forced surge toward the center breaks the
+    loop. The per-axis push alone cannot fix this: the policy re-picks
+    "toward the wall" every tick.
     """
     at_v, at_h = at_wall(creature.pos, margin, width, height)
     if at_v:
@@ -118,6 +131,32 @@ def wall_escape(creature: Creature, margin: float, width: float, height: float) 
         outward = math.pi / 2 if creature.pos.y <= margin else -math.pi / 2  # +y is downward on screen
         creature.pos = push_off_wall(creature.pos, margin, height - margin, axis=1, inward=inward)
         creature.heading = turn_toward(creature.heading, outward, WALL_TURN)
+    _unstuck(creature, margin, width, height)
+
+
+def _unstuck(creature: Creature, margin: float, width: float, height: float) -> None:
+    """Watch net displacement and launch the creature free when it stalls."""
+    if creature.stall_anchor is None:
+        creature.stall_anchor = creature.pos
+        return
+    anchor = creature.stall_anchor
+    moved = math.hypot(creature.pos.x - anchor.x, creature.pos.y - anchor.y)
+    if moved >= STALL_RADIUS:
+        creature.stall_anchor = creature.pos
+        creature.stall_ticks = 0
+        return
+    creature.stall_ticks += 1
+    if creature.stall_ticks >= STALL_WINDOW:
+        cx, cy = width / 2, height / 2
+        d = math.hypot(cx - creature.pos.x, cy - creature.pos.y)
+        if d > 1e-6:
+            step = min(STUCK_SURGE, d)
+            creature.pos = Vec(
+                x=creature.pos.x + (cx - creature.pos.x) / d * step,
+                y=creature.pos.y + (cy - creature.pos.y) / d * step,
+            )
+        creature.stall_anchor = creature.pos
+        creature.stall_ticks = 0
 
 
 def reset_bump_flag(creature: Creature, at_v: bool, at_h: bool) -> None:

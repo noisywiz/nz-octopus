@@ -169,7 +169,8 @@ def draw_bacterium(screen: pygame.Surface, world: World, t: float) -> None:
 
 
 def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
-               world: World, speed: int, paused: bool) -> None:
+               world: World, speed: int, paused: bool,
+               monitor: session.ProgressMonitor | None) -> None:
     """HUD lines in the top-left corner."""
     lines = [
         f"hunger {world.hunger:5.1f}   food {world.food_eaten}   "
@@ -177,9 +178,11 @@ def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
         f"avg reward {world.recent_avg_reward:+.3f}   "
         f"curiosity {world.brain.config.epsilon:.3f}   "
         f"exp {world.brain.experience}",
-        f"speed {speed}x {'[PAUSED]' if paused else ''}   "
-        f"+/- speed  space pause  s save  q quit",
     ]
+    if monitor is not None:
+        lines.append(monitor.hud_line())
+    lines.append(f"speed {speed}x {'[PAUSED]' if paused else ''}   "
+                 f"+/- speed  space pause  s save  q quit")
     for i, line in enumerate(lines):
         screen.blit(font.render(line, True, TEXT), (10, 8 + i * 18))
 
@@ -197,7 +200,8 @@ def handle_key(key: int, speed: int, paused: bool) -> tuple[int, bool, bool]:
     return speed, paused, True
 
 
-def run(world: World, speed: int) -> None:
+def run(world: World, speed: int,
+        monitor: session.ProgressMonitor | None = None) -> None:
     """Main pygame loop: events, sim ticks, render, repeat."""
     pygame.init()
     screen = pygame.display.set_mode(SCREEN)
@@ -219,10 +223,12 @@ def run(world: World, speed: int) -> None:
             if not paused:
                 for _ in range(speed):
                     world.step()
+                    if monitor is not None:
+                        monitor.step(world.food_eaten)
             draw_background(screen)
             draw_food(screen, world, t)
             draw_bacterium(screen, world, t)
-            draw_stats(screen, font, world, speed, paused)
+            draw_stats(screen, font, world, speed, paused, monitor)
             pygame.display.flip()
             clock.tick(FPS)
     except KeyboardInterrupt:
@@ -236,8 +242,9 @@ def main() -> None:
     args = session.parse_args("Bacterium canvas", default_speed=1)
     brain = session.open_brain(args.fresh)
     world = World(brain=brain)
+    monitor = session.ProgressMonitor(brain)
     try:
-        run(world, max(1, args.speed))
+        run(world, max(1, args.speed), monitor)
     finally:
         session.save_brain(brain)
 

@@ -84,7 +84,7 @@ def cell_style(world: World, grid: list[list[str]], x: int, y: int) -> str:
     return DEFAULT_CELL
 
 
-def stats_panel(world: World) -> Text:
+def stats_panel(world: World, monitor: session.ProgressMonitor) -> Text:
     """Hunger bar and lifetime counters under the tank."""
     bar_len = 20
     filled = int(world.hunger / 100 * bar_len)
@@ -98,7 +98,8 @@ def stats_panel(world: World) -> Text:
                f"{world.recent_avg_reward:+.3f}   "
                f"experience: {world.brain.experience}   "
                f"known states: {world.brain.known_states}\n")
-    txt.append(f" epsilon (curiosity): {world.brain.config.epsilon:.3f}")
+    txt.append(f" epsilon (curiosity): {world.brain.config.epsilon:.3f}\n")
+    txt.append(f" growth: {monitor.hud_line()}")
     return txt
 
 
@@ -110,6 +111,7 @@ def main() -> None:
     world = World(brain=brain)
 
     speed = max(1, args.speed)
+    monitor = session.ProgressMonitor(brain)
     frame_interval = 1.0 / 8.0
     try:
         with Live(console=console, refresh_per_second=8, screen=True) as live:
@@ -117,8 +119,9 @@ def main() -> None:
                 frame_start = time.monotonic()
                 for _ in range(speed):
                     world.step()
+                    monitor.step(world.food_eaten)
                 frame = render_frame(world, int(WIDTH), int(HEIGHT))
-                live.update(Group(stats_panel(world), frame))
+                live.update(Group(stats_panel(world, monitor), frame))
                 elapsed = time.monotonic() - frame_start
                 if elapsed < frame_interval:
                     time.sleep(frame_interval - elapsed)
