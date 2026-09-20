@@ -4,9 +4,11 @@ Rendering only — all simulation and session logic lives in `sim`.
 """
 
 import math
+import random
 
 import pygame
 
+import aquarium as aqua
 from sim import World
 from sim import session
 from sim.world import WIDTH, HEIGHT
@@ -22,7 +24,6 @@ HUNGRY = ((214, 130, 84), (160, 92, 56), (170, 96, 60), (255, 170, 60))
 STARVING = ((140, 140, 160), (100, 100, 120), (96, 96, 116), (200, 90, 90))
 WATER_TOP = (12, 24, 48)
 WATER_BOTTOM = (24, 60, 96)
-SAND = (58, 50, 40)
 FOOD_COLOR = (120, 230, 120)
 FOOD_GLOW = (120, 230, 120, 40)
 TEXT = (200, 210, 230)
@@ -48,21 +49,12 @@ def lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tu
     return tuple(int(x + (y - x) * t) for x, y in zip(a, b))  # type: ignore[return-value]
 
 
-def draw_background(screen: pygame.Surface) -> None:
-    """Gradient water, a strip of sand and a few light rays."""
-    for y in range(SCREEN[1]):
-        t = y / SCREEN[1]
-        pygame.draw.line(screen, lerp_color(WATER_TOP, WATER_BOTTOM, t),
-                         (0, y), (SCREEN[0], y))
-    sand_h = int(1.2 * SCALE)
-    pygame.draw.rect(screen, SAND, (0, SCREEN[1] - sand_h, SCREEN[0], sand_h))
-    rays = pygame.Surface(SCREEN, pygame.SRCALPHA)
-    for i in range(4):
-        x0 = int(SCREEN[0] * (0.15 + 0.2 * i))
-        pygame.draw.polygon(rays, (255, 255, 255, 10),
-                            [(x0, 0), (x0 + 60, 0), (x0 - 100, SCREEN[1]),
-                             (x0 - 200, SCREEN[1])])
-    screen.blit(rays, (0, 0))
+FLOOR_Y = SCREEN[1] - int(1.2 * SCALE)
+
+
+def draw_background(screen: pygame.Surface, backdrop: pygame.Surface) -> None:
+    """Static aquarium backdrop."""
+    screen.blit(backdrop, (0, 0))
 
 
 def draw_food(screen: pygame.Surface, world: World, t: float) -> None:
@@ -168,6 +160,24 @@ def draw_bacterium(screen: pygame.Surface, world: World, t: float) -> None:
                       round(y - big.get_height() / 2)))
 
 
+def draw_light_shafts(screen: pygame.Surface, t: float) -> None:
+    """Soft light shafts: wide translucent bands that drift and breathe."""
+    shafts = pygame.Surface(SCREEN, pygame.SRCALPHA)
+    for i in range(3):
+        drift = math.sin(t * 0.05 + i * 2.1) * 40.0
+        breathe = 0.5 + 0.5 * math.sin(t * 0.11 + i * 1.3)
+        x0 = SCREEN[0] * (0.22 + 0.28 * i) + drift
+        tilt = 0.45 + 0.1 * i
+        top_half = 50.0 + 18.0 * i
+        alpha = int(7 + 6 * breathe)
+        pygame.draw.polygon(shafts, (210, 230, 255, alpha), [
+            (x0 - top_half, 0), (x0 + top_half, 0),
+            (x0 + top_half + tilt * SCREEN[1], SCREEN[1]),
+            (x0 - top_half + tilt * SCREEN[1], SCREEN[1]),
+        ])
+    screen.blit(shafts, (0, 0))
+
+
 def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
                world: World, speed: int, paused: bool,
                monitor: session.ProgressMonitor | None) -> None:
@@ -208,6 +218,12 @@ def run(world: World, speed: int,
     pygame.display.set_caption("nz-octopus")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("monospace", 14)
+    backdrop = aqua.build_backdrop(SCREEN[0], SCREEN[1], PIX, FLOOR_Y,
+                                   (WATER_TOP, WATER_BOTTOM), world.terrain)
+    weeds = aqua.make_weeds(SCREEN[0], FLOOR_Y, PIX, count=7, seed=42,
+                            terrain=world.terrain)
+    rng = random.Random()
+    bubbles: list[aqua.Bubble] = []
 
     paused = False
     t = 0.0
@@ -225,9 +241,15 @@ def run(world: World, speed: int,
                     world.step()
                     if monitor is not None:
                         monitor.step(world.food_eaten)
-            draw_background(screen)
+                aqua.step_bubbles(bubbles, -4.0, 1.0 / FPS, float(SCREEN[0]))
+                if random.random() < 0.05:
+                    aqua.spawn_bubble(bubbles, SCREEN[0], FLOOR_Y, rng)
+            draw_background(screen, backdrop)
+            draw_light_shafts(screen, t)
+            aqua.draw_weeds(screen, weeds, t, FLOOR_Y, PIX, world.terrain)
             draw_food(screen, world, t)
             draw_bacterium(screen, world, t)
+            aqua.draw_bubbles(screen, bubbles, PIX)
             draw_stats(screen, font, world, speed, paused, monitor)
             pygame.display.flip()
             clock.tick(FPS)

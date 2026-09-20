@@ -109,7 +109,8 @@ STALL_RADIUS = 1.5  # net displacement below this over the window = stuck
 STUCK_SURGE = 4.0  # units of the forced launch toward the center
 
 
-def wall_escape(creature: Creature, margin: float, width: float, height: float) -> None:
+def wall_escape(creature: Creature, margin: float, width: float, height: float,
+                floor_line: float | None = None) -> None:
     """Physical reflex while touching a wall: push off + turn away.
 
     The push must be stronger than the strongest swim action, otherwise the
@@ -119,17 +120,28 @@ def wall_escape(creature: Creature, margin: float, width: float, height: float) 
     is jittering in place and a forced surge toward the center breaks the
     loop. The per-axis push alone cannot fix this: the policy re-picks
     "toward the wall" every tick.
+
+    `floor_line` is the world y of the dune surface under the creature, when
+    known: touching it counts as the bottom wall, so the same push-off and
+    turn-away reflex applies to dunes.
     """
     at_v, at_h = at_wall(creature.pos, margin, width, height)
+    if floor_line is not None and creature.pos.y >= floor_line:
+        at_h = True
     if at_v:
         inward = WALL_PUSH if creature.pos.x <= margin else -WALL_PUSH
         outward = 0.0 if creature.pos.x <= margin else math.pi  # 0 = +x = away from left wall
         creature.pos = push_off_wall(creature.pos, margin, width - margin, axis=0, inward=inward)
         creature.heading = turn_toward(creature.heading, outward, WALL_TURN)
     if at_h:
+        below_top = floor_line if (
+            floor_line is not None and creature.pos.y >= floor_line
+        ) else height - margin
         inward = WALL_PUSH if creature.pos.y <= margin else -WALL_PUSH
         outward = math.pi / 2 if creature.pos.y <= margin else -math.pi / 2  # +y is downward on screen
-        creature.pos = push_off_wall(creature.pos, margin, height - margin, axis=1, inward=inward)
+        creature.pos = push_off_wall(
+            creature.pos, margin, below_top, axis=1, inward=inward,
+        )
         creature.heading = turn_toward(creature.heading, outward, WALL_TURN)
     _unstuck(creature, margin, width, height)
 

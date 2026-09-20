@@ -13,10 +13,12 @@ from . import food as fd
 from . import metabolism as meta
 from . import rewards as rw
 from . import sensors as sn
+from . import terrain as tn
 from .brain import QBrain
 from .geometry import distance
 
 WIDTH, HEIGHT = 80.0, 30.0
+ART_COLUMNS = int(WIDTH / tn.ART_TO_WORLD)  # tank width in art columns
 
 
 def screen_size() -> tuple[float, float]:
@@ -33,6 +35,7 @@ class World:
 
     brain: QBrain = field(default_factory=lambda: QBrain(sn.N_STATES, cr.N_DIRECTIONS))
     rng: random.Random = field(default_factory=random.Random)
+    terrain: list[int] = field(default_factory=lambda: tn.build(ART_COLUMNS))
     creature: cr.Creature = field(init=False)
     food: list[fd.Food] = field(init=False)
     ticks: int = 0
@@ -95,27 +98,34 @@ class World:
         self.episode_reward += reward.total
         self._remember(reward.total)
 
+    def floor_height(self, x: float) -> float:
+        """Dune height in world units at world x (0 = flat baseline)."""
+        return tn.height_at_world(self.terrain, x, WIDTH)
+
     def _handle_walls(self) -> float:
         """Clamp position, count first-contact bumps, run the escape reflex."""
         c = self.creature
+        floor_line = HEIGHT - self.floor_height(c.pos.x) - WALL_MARGIN * 0.5
         c.pos = cr.Vec(
             x=min(WIDTH - WALL_MARGIN, max(WALL_MARGIN, c.pos.x)),
-            y=min(HEIGHT - WALL_MARGIN, max(WALL_MARGIN, c.pos.y)),
+            y=min(HEIGHT - WALL_MARGIN, max(WALL_MARGIN, min(floor_line, c.pos.y))),
         )
         at_v, at_h = cr.at_wall(c.pos, WALL_MARGIN, WIDTH, HEIGHT)
+        at_h = at_h or c.pos.y >= floor_line
         bumped = (at_v or at_h) and not c.bumping
         c.bumping = at_v or at_h
         if bumped:
             self.wall_bumps += 1
         if at_v or at_h:
-            cr.wall_escape(c, WALL_MARGIN, WIDTH, HEIGHT)
+            cr.wall_escape(c, WALL_MARGIN, WIDTH, HEIGHT, floor_line)
         return rw.wall_bump(bumped)
 
     def _advance_food(self) -> None:
         """Sink every piece one tick, drop dissolved ones, spawn on rhythm."""
         alive: list[fd.Food] = []
         for f in self.food:
-            sunk = fd.sunk(f, self.rng, WIDTH, HEIGHT)
+            sunk = fd.sunk(f, self.rng, WIDTH,
+                           HEIGHT - self.floor_height(f.pos.x))
             if sunk is not None:
                 alive.append(sunk)
         self.food = alive
