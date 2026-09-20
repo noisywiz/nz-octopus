@@ -11,7 +11,7 @@ import pygame
 import aquarium as aqua
 from sim import World
 from sim import session
-from sim.creature import Creature, Vec
+from sim.creature import Creature, SWIM_SPEED, Vec
 from sim.world import WIDTH, HEIGHT, CreatureBrain
 
 SCALE = 12  # pixels per world unit
@@ -123,13 +123,20 @@ def draw_body(art: pygame.Surface, center: tuple[float, float],
 
 
 def draw_flagellum(art: pygame.Surface, center: tuple[float, float],
-                   heading: float, t: float,
+                   heading: float, t: float, speed: float,
                    tail_color: tuple[int, int, int]) -> None:
-    """Wavy tail: a sine whose amplitude grows toward the tip."""
+    """Swimming-flagellum beat: a travelling wave growing toward the tip.
+
+    Real flagella don't wag side-to-side like a stick: they send a wave
+    from base to tip, and amplitude *and* wavelength both grow along the
+    length. We approximate that with a phase that unwinds along the tail
+    and an amplitude curve that stays near zero at the root.
+    """
     ax, ay = center
     body_edge = int(1.1 * SCALE / PIX) + 3
     tail_len = int(3.2 * SCALE / PIX)
-    phase = t * 0.45 * 8.0
+    # beat frequency scales with how hard the creature is actually swimming
+    phase = t * (4.0 + 10.0 * min(1.0, speed))
 
     def dot(px: float, py: float, r: int) -> None:
         for yy in range(int(py) - r, int(py) + r + 1):
@@ -142,10 +149,21 @@ def draw_flagellum(art: pygame.Surface, center: tuple[float, float],
         d = body_edge + i
         bx = ax - math.cos(heading) * d
         by = ay - math.sin(heading) * d
-        wave = math.sin(phase - u * 4.0) * (1.0 + 2.6 * u)
-        bx += -math.sin(heading) * wave
-        by += math.cos(heading) * wave
+        # wavelength stretches toward the tip (k shrinks), amplitude bends in
+        wave = math.sin(phase - u * (4.5 - 2.0 * u)) * (0.6 + 3.4 * u * u)
+        # add a slight backward sweep: the wave pushes water behind
+        sweep = 1.5 * u
+        bx += -math.sin(heading) * wave + math.cos(heading) * sweep * 0.3
+        by += math.cos(heading) * wave + math.sin(heading) * sweep * 0.3
         dot(bx, by, max(1, 2 - i // (tail_len // 2)))
+
+
+def creature_speed(creature: Creature) -> float:
+    """Distance covered last tick, normalized to full swim speed."""
+    if len(creature.trail) < 2:
+        return 0.0
+    a, b = creature.trail[-1], creature.trail[-2]
+    return math.hypot(a.x - b.x, a.y - b.y) / SWIM_SPEED
 
 
 def draw_bacterium(screen: pygame.Surface, world: World, t: float,
@@ -160,7 +178,7 @@ def draw_bacterium(screen: pygame.Surface, world: World, t: float,
 
     art = pygame.Surface((ART_SIZE, ART_SIZE), pygame.SRCALPHA)
     center = (ART_SIZE / 2, ART_SIZE / 2)
-    draw_flagellum(art, center, heading, t, palette[2])
+    draw_flagellum(art, center, heading, t, creature_speed(creature), palette[2])
     draw_body(art, center, heading, palette)
 
     big = pygame.transform.scale(art, (ART_SIZE * PIX, ART_SIZE * PIX))
