@@ -148,9 +148,9 @@ def draw_flagellum(art: pygame.Surface, center: tuple[float, float],
         d = body_edge + i
         bx = ax - math.cos(heading) * d
         by = ay - math.sin(heading) * d
-        # one long wave: wavelength constant, amplitude quadratic from a
-        # near-zero root — the tail bends, it never snaps sideways
-        wave = math.sin(phase - u * 2.2) * (0.4 + 3.2 * u * u)
+        # one long lazy wave: the tip swings ~4 screen px, the root ~1 px,
+        # so the tail trails behind the body instead of whipping around
+        wave = math.sin(phase - u * 2.2) * (0.3 + 1.1 * u * u)
         bx += -math.sin(heading) * wave
         by += math.cos(heading) * wave
         dot(bx, by, max(1, 2 - i // (tail_len // 2)))
