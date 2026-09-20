@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import creature as cr
+from . import food as fd
 from . import metabolism as meta
 from . import rewards as rw
 from . import sensors as sn
@@ -23,18 +24,7 @@ def screen_size() -> tuple[float, float]:
     return WIDTH, HEIGHT
 WALL_MARGIN = 1.0
 EAT_RADIUS = 2.0  # mouth with margin: near-miss arcs used to sail past food
-N_FOOD = 6
-FOOD_ENERGY = 40.0
-FOOD_SPAWN_PAD = 6.0  # food never spawns this close to a wall (angles attract camping)
 REWARD_WINDOW = 500  # ticks in the rolling average-reward window
-
-
-@dataclass(frozen=True)
-class Food:
-    """A piece of food: a position and the energy it restores."""
-
-    pos: cr.Vec
-    energy: float = FOOD_ENERGY
 
 
 @dataclass
@@ -44,8 +34,9 @@ class World:
     brain: QBrain = field(default_factory=lambda: QBrain(sn.N_STATES, cr.N_DIRECTIONS))
     rng: random.Random = field(default_factory=random.Random)
     creature: cr.Creature = field(init=False)
-    food: list[Food] = field(init=False)
+    food: list[fd.Food] = field(init=False)
     ticks: int = 0
+    ticks_since_spawn: int = fd.SPAWN_INTERVAL  # first piece drops immediately
     food_eaten: int = 0
     wall_bumps: int = 0
     starvations: int = 0
@@ -54,7 +45,7 @@ class World:
 
     def __post_init__(self) -> None:
         self.creature = self._spawn_creature()
-        self.food = [self._spawn_food() for _ in range(N_FOOD)]
+        self.food = []  # the tank starts empty; pieces drop in one by one
 
     # --- construction helpers -------------------------------------------------
 
@@ -67,13 +58,9 @@ class World:
             starving=0.0,
         )
 
-    def _spawn_food(self) -> Food:
-        """Random position, kept away from the walls."""
-        pad = FOOD_SPAWN_PAD
-        return Food(pos=cr.Vec(
-            x=self.rng.uniform(pad, WIDTH - pad),
-            y=self.rng.uniform(pad, HEIGHT - pad),
-        ))
+    def _spawn_food(self) -> fd.Food:
+        """A new piece dropping from the surface."""
+        return fd.spawn(self.rng, WIDTH)
 
     # --- senses ----------------------------------------------------------------
 
@@ -96,6 +83,7 @@ class World:
 
         cr.move(self.creature, action)
         wall_reward = self._handle_walls()
+        self._advance_food()
         food_reward = self._handle_eating()
         metabolic = self._handle_metabolism()
 
@@ -123,8 +111,21 @@ class World:
             cr.wall_escape(c, WALL_MARGIN, WIDTH, HEIGHT)
         return rw.wall_bump(bumped)
 
+    def _advance_food(self) -> None:
+        """Sink every piece one tick, drop dissolved ones, spawn on rhythm."""
+        alive: list[fd.Food] = []
+        for f in self.food:
+            sunk = fd.sunk(f, self.rng, WIDTH, HEIGHT)
+            if sunk is not None:
+                alive.append(sunk)
+        self.food = alive
+        self.ticks_since_spawn += 1
+        if fd.spawn_due(len(self.food), self.ticks_since_spawn):
+            self.food.append(self._spawn_food())
+            self.ticks_since_spawn = 0
+
     def _handle_eating(self) -> float:
-        """Eat every piece of food within reach; each respawns elsewhere."""
+        """Eat every piece of food within reach; each respawns at the surface."""
         ate = False
         for i, f in enumerate(self.food):
             if cr.touch(self.creature.pos, f.pos, EAT_RADIUS):

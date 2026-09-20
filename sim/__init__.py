@@ -2,9 +2,10 @@
 
 from .brain import BrainConfig, QBrain
 from .creature import N_DIRECTIONS, Body, Creature, Vec
+from .food import Food
 from .sensors import N_STATES, Reading
 from .geometry import angle_sector
-from .world import Food, World
+from .world import World
 
 DIR_ARROW_BY_SECTOR = ("→", "↘", "↓", "↙", "←", "↖", "↑", "↗")
 

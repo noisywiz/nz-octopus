@@ -11,6 +11,7 @@ import math
 import random
 from dataclasses import dataclass, field
 
+from . import food as fd
 from .brain import QBrain
 from .creature import MAX_TURN, SWIM_SPEED, Vec
 from .geometry import turn_toward
@@ -18,7 +19,6 @@ from .geometry import turn_toward
 # Oracle kinematics — deliberately the same limits as the creature (creature.py).
 EAT_RADIUS = 2.0  # keep in sync with world.EAT_RADIUS
 TANK_WIDTH, TANK_HEIGHT = 80.0, 30.0
-SPAWN_PAD = 6.0  # keep in sync with world.FOOD_SPAWN_PAD
 
 ORACLE_PIECES = 30  # pieces the oracle "eats" per estimation run
 ORACLE_RUNS = 8  # Monte-Carlo runs averaged into the estimate
@@ -156,34 +156,50 @@ def ideal_rate() -> float:
 
 
 def _oracle_run(rng: random.Random) -> int:
-    """Ticks for the oracle to eat ORACLE_PIECES pieces. Returns ticks."""
+    """Ticks for the oracle to eat ORACLE_PIECES pieces. Returns ticks.
+
+    Mirrors the world's food economy: pieces drop one at a time on the
+    spawn rhythm and dissolve on the floor. The first piece is already
+    due at tick 0, same as the world's initial spawn timer.
+    """
     pos = Vec(TANK_WIDTH / 2, TANK_HEIGHT / 2)
     heading = 0.0
-    food = [_random_food(rng) for _ in range(6)]
+    food = [_random_food(rng)]
     ticks = 0
+    since_spawn = fd.SPAWN_INTERVAL
     eaten = 0
     while eaten < ORACLE_PIECES and ticks < ORACLE_MAX_TICKS:
-        target = _nearest(pos, food)
+        food = [s for f in food if (s := fd.sunk(f, rng, TANK_WIDTH, TANK_HEIGHT)) is not None]
+        since_spawn += 1
+        if fd.spawn_due(len(food), since_spawn):
+            food.append(_random_food(rng))
+            since_spawn = 0
+        if not food:  # all pieces dissolved in transit: wait for the next drop
+            ticks += 1
+            continue
+        target = _nearest(pos, food).pos
         heading = turn_toward(heading, math.atan2(target.y - pos.y, target.x - pos.x), MAX_TURN)
         pos = Vec(pos.x + math.cos(heading) * SWIM_SPEED,
                   pos.y + math.sin(heading) * SWIM_SPEED)
         ticks += 1
-        for i, f in enumerate(food):
-            if math.hypot(f.x - pos.x, f.y - pos.y) < EAT_RADIUS:
-                food[i] = _random_food(rng)
+        survivors: list[fd.Food] = []
+        for f in food:
+            if math.hypot(f.pos.x - pos.x, f.pos.y - pos.y) < EAT_RADIUS:
                 eaten += 1
+            else:
+                survivors.append(f)
+        food = survivors
     return ticks
 
 
-def _nearest(pos: Vec, food: list[Vec]) -> Vec:
+def _nearest(pos: Vec, food: list[fd.Food]) -> fd.Food:
     """Closest food to a point."""
-    return min(food, key=lambda f: (f.x - pos.x) ** 2 + (f.y - pos.y) ** 2)
+    return min(food, key=lambda f: (f.pos.x - pos.x) ** 2 + (f.pos.y - pos.y) ** 2)
 
 
-def _random_food(rng: random.Random) -> Vec:
-    """Food spawn position, same constraint as the world."""
-    return Vec(x=rng.uniform(SPAWN_PAD, TANK_WIDTH - SPAWN_PAD),
-               y=rng.uniform(SPAWN_PAD, TANK_HEIGHT - SPAWN_PAD))
+def _random_food(rng: random.Random) -> fd.Food:
+    """A new piece at the surface, same physics as the world's."""
+    return fd.spawn(rng, TANK_WIDTH)
 
 
 def state_coverage(brain: QBrain) -> tuple[int, int]:
