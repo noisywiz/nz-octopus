@@ -5,9 +5,10 @@ import time
 
 from sim import world as wd
 from sim.brain import QBrain
-from sim.creature import N_DIRECTIONS
+from sim.creature import Creature, N_DIRECTIONS, Vec
 from sim.maturity import MaturityConfig, PlateauTracker, assess, ideal_rate
 from sim.sensors import N_STATES
+from sim.world import CreatureBrain
 
 TICKS = 150_000
 SEED = 3
@@ -15,7 +16,16 @@ SEED = 3
 
 def main() -> None:
     rng = random.Random(SEED)
-    world = wd.World(brain=QBrain(N_STATES, N_DIRECTIONS), rng=rng)
+    brain = QBrain(N_STATES, N_DIRECTIONS)
+    world = wd.World(creatures=[CreatureBrain(
+        body=Creature(
+            pos=Vec(wd.WIDTH / 2, wd.HEIGHT / 2),
+            heading=rng.uniform(0, 6.283185307179586),
+            hunger=30.0,
+            starving=0.0,
+        ),
+        brain=brain,
+    )], rng=rng)
     tracker = PlateauTracker(config=MaturityConfig())
     oracle = ideal_rate()
     last_len = -1

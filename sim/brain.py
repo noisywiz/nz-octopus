@@ -5,7 +5,7 @@ import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
-SAVE_FORMAT = 2  # bump when the state encoding changes -> old saves are rejected
+SAVE_FORMAT = 3  # bump when the save layout changes -> old saves are rejected
 
 
 @dataclass
@@ -30,6 +30,7 @@ class QBrain:
     config: BrainConfig = field(default_factory=BrainConfig)
     q: dict[int, list[float]] = field(default_factory=dict)
     experience: int = 0
+    id: int = 0  # creature identity in the shared save file
 
     def row(self, state: int) -> list[float]:
         """Q-values for one state, created zero-filled on first touch."""
@@ -99,3 +100,39 @@ class QBrain:
         brain.experience = int(data["experience"])
         brain.config.epsilon = float(data["epsilon"])
         return brain
+
+
+def save_all(brains: list["QBrain"], path: Path) -> None:
+    """Persist every creature's brain into one file, keyed by creature id."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "format": SAVE_FORMAT,
+        "creatures": [
+            {
+                "id": brain.id,
+                "epsilon": brain.config.epsilon,
+                "experience": brain.experience,
+                "q": {str(k): v for k, v in brain.q.items()},
+            }
+            for brain in brains
+        ],
+    }
+    path.write_text(json.dumps(payload))
+
+
+def load_all(path: Path, n_states: int, n_actions: int) -> list["QBrain"]:
+    """Rebuild all brains from disk; a stale save returns one empty brain."""
+    if not path.exists():
+        return [QBrain(n_states=n_states, n_actions=n_actions)]
+    data = json.loads(path.read_text())
+    if data.get("format") != SAVE_FORMAT:
+        return [QBrain(n_states=n_states, n_actions=n_actions)]
+    brains: list[QBrain] = []
+    for entry in data["creatures"]:
+        brain = QBrain(n_states=n_states, n_actions=n_actions)
+        brain.id = int(entry["id"])
+        brain.q = {int(k): list(v) for k, v in entry["q"].items()}
+        brain.experience = int(entry["experience"])
+        brain.config.epsilon = float(entry["epsilon"])
+        brains.append(brain)
+    return brains or [QBrain(n_states=n_states, n_actions=n_actions)]

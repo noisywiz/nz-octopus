@@ -3,6 +3,7 @@
 Rendering only — all simulation and session logic lives in `sim`.
 """
 
+import random
 import time
 
 from rich.console import Console, Group
@@ -11,8 +12,9 @@ from rich.text import Text
 
 from sim import DIR_ARROW_BY_SECTOR, N_DIRECTIONS, World
 from sim import session
+from sim.creature import Creature, Vec
 from sim.geometry import angle_sector
-from sim.world import WIDTH, HEIGHT
+from sim.world import WIDTH, HEIGHT, CreatureBrain
 
 DEFAULT_CELL = "grey19"
 WALL_CELL = "grey42"
@@ -32,7 +34,7 @@ def mood_style(hunger: float) -> str:
 
 
 def frame_grid(world: World, width: int, height: int) -> list[list[str]]:
-    """Tank cells as characters: walls, food, trail and the creature."""
+    """Tank cells as characters: walls, food, trails and the creatures."""
     grid = [[" "] * width for _ in range(height)]
     for x in range(width):
         grid[0][x] = grid[height - 1][x] = "─"
@@ -51,10 +53,11 @@ def frame_grid(world: World, width: int, height: int) -> list[list[str]]:
         px, py = round(p.x), round(p.y)
         if 0 <= px < width and 0 <= py < height and grid[py][px] == " ":
             grid[py][px] = "·"
-    px, py = round(world.position.x), round(world.position.y)
-    if 0 <= px < width and 0 <= py < height:
-        sector = angle_sector(world.heading, N_DIRECTIONS)
-        grid[py][px] = DIR_ARROW_BY_SECTOR[sector]
+    for cb in world.creatures:
+        px, py = round(cb.body.pos.x), round(cb.body.pos.y)
+        if 0 <= px < width and 0 <= py < height:
+            sector = angle_sector(cb.body.heading, N_DIRECTIONS)
+            grid[py][px] = DIR_ARROW_BY_SECTOR[sector]
     return grid
 
 
@@ -80,7 +83,7 @@ def cell_style(world: World, grid: list[list[str]], x: int, y: int) -> str:
     if cell == "·":
         return mood_style(world.hunger)
     if cell != " ":
-        return mood_style(world.hunger)  # the creature itself
+        return mood_style(world.hunger)  # a creature itself
     return DEFAULT_CELL
 
 
@@ -93,7 +96,8 @@ def stats_panel(world: World, monitor: session.ProgressMonitor) -> Text:
     txt.append(" hunger ", style="bold")
     txt.append(f"{bar} {world.hunger:5.1f}\n", style=mood_style(world.hunger))
     txt.append(f" ticks: {world.ticks}   food eaten: {world.food_eaten}   "
-               f"wall bumps: {world.wall_bumps}   starvations: {world.starvations}\n")
+               f"wall bumps: {world.wall_bumps}   starvations: {world.starvations}   "
+               f"creatures: {len(world.creatures)}\n")
     txt.append(f" avg reward ({len(world.recent_rewards)}t): "
                f"{world.recent_avg_reward:+.3f}   "
                f"experience: {world.brain.experience}   "
@@ -104,14 +108,22 @@ def stats_panel(world: World, monitor: session.ProgressMonitor) -> Text:
 
 
 def main() -> None:
-    """Entry point: parse args, load the brain, run the render loop, save."""
+    """Entry point: parse args, load the brains, run the render loop, save."""
     args = session.parse_args("Creature TUI", default_speed=2)
     console = Console()
-    brain = session.open_brain(args.fresh)
-    world = World(brain=brain)
+    brains = session.open_brains(args.fresh)
+    world = World(creatures=[CreatureBrain(
+        body=Creature(
+            pos=Vec(WIDTH / 2, HEIGHT / 2),
+            heading=random.uniform(0, 6.283185307179586),
+            hunger=30.0,
+            starving=0.0,
+        ),
+        brain=brain,
+    ) for brain in brains])
 
     speed = max(1, args.speed)
-    monitor = session.ProgressMonitor(brain)
+    monitor = session.ProgressMonitor(world.brain)
     frame_interval = 1.0 / 8.0
     try:
         with Live(console=console, refresh_per_second=8, screen=True) as live:
@@ -128,8 +140,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        session.save_brain(brain)
-        console.print(f"[green]Brain saved to {session.BRAIN_PATH}[/green]")
+        session.save_brains([cb.brain for cb in world.creatures])
+        console.print(f"[green]Brains saved to {session.BRAIN_PATH}[/green]")
 
 
 if __name__ == "__main__":

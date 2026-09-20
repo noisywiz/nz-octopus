@@ -3,12 +3,12 @@
 import argparse
 from pathlib import Path
 
-from .brain import QBrain
+from .brain import QBrain, load_all, save_all
 from .creature import N_DIRECTIONS
 from .maturity import MaturityConfig, MaturityReport, PlateauTracker, assess, ideal_rate
 from .sensors import N_STATES
 
-BRAIN_PATH = Path(__file__).resolve().parent.parent / "brain.json"
+BRAIN_PATH = Path(__file__).resolve().parent.parent / "brains.json"
 PROGRESS_PATH = BRAIN_PATH.with_name("progress.tsv")
 
 LOG_HEADER = "tick\trate\tbest\tcompetence\tstates\tmature"
@@ -108,13 +108,13 @@ def parse_args(description: str, default_speed: int) -> argparse.Namespace:
     return parser.parse_args()
 
 
-def open_brain(fresh: bool) -> QBrain:
-    """Load the brain from disk, or start empty with --fresh."""
+def open_brains(fresh: bool) -> list[QBrain]:
+    """Load every creature's brain from disk, or start with one empty."""
     if fresh and BRAIN_PATH.exists():
         BRAIN_PATH.unlink()
-    return QBrain.load(BRAIN_PATH, N_STATES, N_DIRECTIONS)
+    return load_all(BRAIN_PATH, N_STATES, N_DIRECTIONS)
 
 
-def save_brain(brain: QBrain) -> None:
-    """Persist the brain on exit."""
-    brain.save(BRAIN_PATH)
+def save_brains(brains: list[QBrain]) -> None:
+    """Persist all brains on exit."""
+    save_all(brains, BRAIN_PATH)

@@ -11,7 +11,8 @@ import pygame
 import aquarium as aqua
 from sim import World
 from sim import session
-from sim.world import WIDTH, HEIGHT
+from sim.creature import Creature, Vec
+from sim.world import WIDTH, HEIGHT, CreatureBrain
 
 SCALE = 12  # pixels per world unit
 FPS = 60
@@ -33,15 +34,20 @@ Palette = tuple[tuple[int, int, int], tuple[int, int, int],
                 tuple[int, int, int], tuple[int, int, int]]
 
 
-def mood_palette(world: World) -> Palette:
+def mood_palette_hunger(hunger: float, starving: float) -> Palette:
     """Color by hunger: bright when fed, fades to gray while starving."""
-    if world.starving <= 0.0:
-        return HAPPY if world.hunger < 45 else HUNGRY
-    base = HUNGRY if world.hunger < 85 else STARVING
-    k = min(1.0, world.starving)
+    if starving <= 0.0:
+        return HAPPY if hunger < 45 else HUNGRY
+    base = HUNGRY if hunger < 85 else STARVING
+    k = min(1.0, starving)
     return tuple(  # type: ignore[return-value]
         tuple(int(c + (128 - c) * k) for c in col) for col in base
     )
+
+
+def mood_palette(world: World) -> Palette:
+    """Color of the first creature (kept for single-creature callers)."""
+    return mood_palette_hunger(world.hunger, world.starving)
 
 
 def lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
@@ -71,10 +77,10 @@ def draw_food(screen: pygame.Surface, world: World, t: float) -> None:
                             [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)])
 
 
-def draw_trail(screen: pygame.Surface, world: World,
+def draw_trail(screen: pygame.Surface, trail: list[Vec],
                color: tuple[int, int, int]) -> None:
-    """Soft fading squares behind the creature."""
-    points = world.trail[::2]
+    """Soft fading squares behind one creature."""
+    points = trail[::2]
     for i, p in enumerate(points):
         alpha = int(35 * (i + 1) / max(1, len(points)))
         square = pygame.Surface((PIX, PIX), pygame.SRCALPHA)
@@ -142,13 +148,15 @@ def draw_flagellum(art: pygame.Surface, center: tuple[float, float],
         dot(bx, by, max(1, 2 - i // (tail_len // 2)))
 
 
-def draw_bacterium(screen: pygame.Surface, world: World, t: float) -> None:
-    """The whole creature: trail + flagellum + body, upscaled with NEAREST."""
-    palette = mood_palette(world)
-    x, y = world.position.x * SCALE, world.position.y * SCALE
-    heading = world.heading
+def draw_bacterium(screen: pygame.Surface, world: World, t: float,
+                   cb: CreatureBrain) -> None:
+    """One creature: trail + flagellum + body, upscaled with NEAREST."""
+    creature = cb.body
+    palette = mood_palette_hunger(creature.hunger, creature.starving)
+    x, y = creature.pos.x * SCALE, creature.pos.y * SCALE
+    heading = creature.heading
 
-    draw_trail(screen, world, palette[0])
+    draw_trail(screen, creature.trail, palette[0])
 
     art = pygame.Surface((ART_SIZE, ART_SIZE), pygame.SRCALPHA)
     center = (ART_SIZE / 2, ART_SIZE / 2)
@@ -158,6 +166,12 @@ def draw_bacterium(screen: pygame.Surface, world: World, t: float) -> None:
     big = pygame.transform.scale(art, (ART_SIZE * PIX, ART_SIZE * PIX))
     screen.blit(big, (round(x - big.get_width() / 2),
                       round(y - big.get_height() / 2)))
+
+
+def draw_all(screen: pygame.Surface, world: World, t: float) -> None:
+    """Every creature, oldest first (newborns on top)."""
+    for cb in world.creatures:
+        draw_bacterium(screen, world, t, cb)
 
 
 def draw_light_shafts(screen: pygame.Surface, t: float) -> None:
@@ -184,7 +198,8 @@ def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
     """HUD lines in the top-left corner."""
     lines = [
         f"hunger {world.hunger:5.1f}   food {world.food_eaten}   "
-        f"bumps {world.wall_bumps}   starved {world.starvations}",
+        f"bumps {world.wall_bumps}   starved {world.starvations}   "
+        f"creatures {len(world.creatures)}",
         f"avg reward {world.recent_avg_reward:+.3f}   "
         f"curiosity {world.brain.config.epsilon:.3f}   "
         f"exp {world.brain.experience}",
@@ -192,7 +207,7 @@ def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
     if monitor is not None:
         lines.append(monitor.hud_line())
     lines.append(f"speed {speed}x {'[PAUSED]' if paused else ''}   "
-                 f"+/- speed  space pause  s save  q quit")
+                 f"click spawn  +/- speed  space pause  s save  q quit")
     for i, line in enumerate(lines):
         screen.blit(font.render(line, True, TEXT), (10, 8 + i * 18))
 
@@ -208,6 +223,11 @@ def handle_key(key: int, speed: int, paused: bool) -> tuple[int, bool, bool]:
     if key in (pygame.K_MINUS, pygame.K_KP_MINUS):
         return max(1, speed // 2), paused, True
     return speed, paused, True
+
+
+def screen_to_world(mx: int, my: int) -> tuple[float, float]:
+    """Convert a mouse click to world coordinates."""
+    return mx / SCALE, my / SCALE
 
 
 def run(world: World, speed: int,
@@ -236,6 +256,9 @@ def run(world: World, speed: int,
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     speed, paused, running = handle_key(event.key, speed, paused)
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    wx, wy = screen_to_world(*event.pos)
+                    world.spawn_at(wx, wy)
             if not paused:
                 for _ in range(speed):
                     world.step()
@@ -248,7 +271,7 @@ def run(world: World, speed: int,
             draw_light_shafts(screen, t)
             aqua.draw_weeds(screen, weeds, t, FLOOR_Y, PIX, world.terrain)
             draw_food(screen, world, t)
-            draw_bacterium(screen, world, t)
+            draw_all(screen, world, t)
             aqua.draw_bubbles(screen, bubbles, PIX)
             draw_stats(screen, font, world, speed, paused, monitor)
             pygame.display.flip()
@@ -260,15 +283,23 @@ def run(world: World, speed: int,
 
 
 def main() -> None:
-    """Entry point: parse args, load the brain, run, save the brain."""
+    """Entry point: parse args, load the brains, run, save the brains."""
     args = session.parse_args("Bacterium canvas", default_speed=1)
-    brain = session.open_brain(args.fresh)
-    world = World(brain=brain)
-    monitor = session.ProgressMonitor(brain)
+    brains = session.open_brains(args.fresh)
+    world = World(creatures=[CreatureBrain(
+        body=Creature(
+            pos=Vec(WIDTH / 2, HEIGHT / 2),
+            heading=random.uniform(0, 6.283185307179586),
+            hunger=30.0,
+            starving=0.0,
+        ),
+        brain=brain,
+    ) for brain in brains])
+    monitor = session.ProgressMonitor(world.brain)
     try:
         run(world, max(1, args.speed), monitor)
     finally:
-        session.save_brain(brain)
+        session.save_brains([cb.brain for cb in world.creatures])
 
 
 if __name__ == "__main__":
