@@ -8,9 +8,10 @@ sideways (a smooth sine plus a tiny random jitter — no snapping), and
 dissolve when they touch the bottom, so food never waits on the floor.
 """
 
+import itertools
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .creature import Vec
 
@@ -32,12 +33,15 @@ class Food:
 
     `base_x` is the slowly drifting center column; the smelled position is
     `base_x` plus the sine wobble, so the plume sways with the piece.
+    `fid` is a stable identity: physics re-creates the object every tick,
+    so holders (octopus arms) track pieces by fid, not by object identity.
     """
 
     base_x: float
     y: float
     phase: float
     energy: float = FOOD_ENERGY
+    fid: int = field(default=-1, compare=False)
 
     @property
     def pos(self) -> Vec:
@@ -48,12 +52,21 @@ class Food:
         )
 
 
+_ids = itertools.count()
+
+
+def _next_id() -> int:
+    """A fresh stable id for a newly spawned piece."""
+    return next(_ids)
+
+
 def spawn(rng: random.Random, width: float) -> Food:
     """A new piece at the surface, in a column kept away from the walls."""
     return Food(
         base_x=rng.uniform(SPAWN_PAD, width - SPAWN_PAD),
         y=SURFACE_Y,
         phase=rng.uniform(0, 2.0 * math.pi),
+        fid=_next_id(),
     )
 
 
@@ -68,6 +81,7 @@ def sunk(food: Food, rng: random.Random, width: float, height: float) -> Food | 
         y=min(height - FLOOR_PAD, food.y + SINK_SPEED),
         phase=food.phase + WOBBLE_RATE,
         energy=food.energy,
+        fid=food.fid,
     )
 
 

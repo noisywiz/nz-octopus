@@ -11,8 +11,9 @@ import pygame
 
 import aquarium as aqua
 from sim import World
+from sim import creature as cr
+from sim import octopus_body as ob
 from sim import session
-from sim.creature import Creature, SWIM_SPEED, Vec
 from sim.jet import JetAnimator
 from sim.world import WIDTH, HEIGHT, CreatureBrain
 
@@ -37,7 +38,7 @@ Palette = tuple[tuple[int, int, int], tuple[int, int, int],
                 tuple[int, int, int], tuple[int, int, int]]
 
 N_ARMS = 8
-ARM_LEN = 14  # art pixels per arm
+ART_PER_WORLD = 2.0  # art pixels per world unit on the octopus sprite
 EYE_WHITE = (255, 255, 255, 255)
 EYE_PUPIL = (20, 20, 30, 255)
 
@@ -118,20 +119,12 @@ def draw_mantle(art: pygame.Surface, center: tuple[float, float],
               1.0, (*accent, 255))
 
 
-def draw_arms(art: pygame.Surface, center: tuple[float, float],
-              heading: float, bend: float, t: float, speed: float,
-              thrusting: bool, effort: float,
+def draw_arms(art: pygame.Surface, origin: tuple[float, float],
+              arms: ob.Arms | None, world_origin: tuple[float, float],
               arm_color: tuple[int, int, int]) -> None:
-    """Eight reactive arms: stream behind in a thrust, relax into a fan
-    during the glide, gather under the body at rest.
-    """
-    ax, ay = center
-    rear_h = heading - math.pi - bend  # where the arms attach
-    phase = t * 5.0 * min(1.0, max(0.2, speed))
-    # during a thrust the arms trail straight back and bunch together;
-    # while gliding they relax outward; at rest they droop into a fan
-    stream = effort if thrusting else 0.0
-    relax = (1.0 - effort) if thrusting else (0.35 + 0.4 * (1.0 - speed))
+    """Draw the simulated joint chains, mapped from world to art pixels."""
+    ax, ay = origin
+    ox, oy = world_origin
 
     def arm_dot(px: float, py: float, r: int) -> None:
         for yy in range(int(py) - r, int(py) + r + 1):
@@ -139,36 +132,22 @@ def draw_arms(art: pygame.Surface, center: tuple[float, float],
                 if 0 <= xx < ART_SIZE and 0 <= yy < ART_SIZE:
                     art.set_at((xx, yy), (*arm_color, 255))
 
-    for arm in range(N_ARMS):
-        # fan width: squeezed shut while streaming, wide while relaxed
-        spread = (arm / (N_ARMS - 1) - 0.5) * math.tau * (0.55 * relax + 0.08)
-        base_h = rear_h + spread
-        # streaming arms curve less (they trail); relaxed arms curl outward
-        curl = (0.9 * (arm / (N_ARMS - 1) - 0.5)) * (1.0 - stream)
-        for i in range(ARM_LEN):
-            u = i / ARM_LEN
-            d = 4 + i
-            h = base_h + curl * u
-            px = ax + math.cos(h) * d
-            py = ay + math.sin(h) * d
-            # wave: lively in a thrust, lazy in a glide, slow at rest
-            wave = math.sin(phase * (1.0 + stream) - u * 3.0 + arm * 0.7)
-            wave *= (0.3 + 1.6 * u * u) * (1.0 - 0.5 * stream)
-            px += -math.sin(h) * wave
-            py += math.cos(h) * wave
-            arm_dot(px, py, max(1, 2 - i // (ARM_LEN // 2)))
+    if arms is None:
+        return
+    for arm in arms.limbs:
+        pts = [
+            (ax + (j.x - ox) * ART_PER_WORLD,
+             ay + (j.y - oy) * ART_PER_WORLD)
+            for j in arm.joints
+        ]
+        for i, (px, py) in enumerate(pts):
+            arm_dot(px, py, max(1, 2 - i // (len(pts) // 2)))
             if i % 3 == 2:  # sucker bumps on the underside
-                sx = px + math.cos(h + math.pi / 2) * 1.2
-                sy = py + math.sin(h + math.pi / 2) * 1.2
-                arm_dot(sx, sy, 1)
-
-
-def creature_speed(creature: Creature) -> float:
-    """Distance covered last tick, normalized to full swim speed."""
-    if len(creature.trail) < 2:
-        return 0.0
-    a, b = creature.trail[-1], creature.trail[-2]
-    return math.hypot(a.x - b.x, a.y - b.y) / SWIM_SPEED
+                arm_dot(px, py, 1)
+        if arm.carry is not None:  # the gripped piece rides the tip
+            fx = ax + (arm.carry.x - ox) * ART_PER_WORLD
+            fy = ay + (arm.carry.y - oy) * ART_PER_WORLD
+            arm_dot(fx, fy, 2)
 
 
 def draw_octopus(screen: pygame.Surface, t: float,
@@ -178,14 +157,15 @@ def draw_octopus(screen: pygame.Surface, t: float,
     palette = mood_palette_hunger(creature.hunger, creature.starving)
     x, y = anim.pos.x * SCALE, anim.pos.y * SCALE
     heading = anim.heading
-    speed = creature_speed(creature)
     # mantle contraction peaks mid-thrust
     squeeze = anim.effort * (1.0 - anim.pulse_phase) if anim.thrusting else 0.0
 
     art = pygame.Surface((ART_SIZE, ART_SIZE), pygame.SRCALPHA)
     center = (ART_SIZE / 2, ART_SIZE / 2)
-    draw_arms(art, center, heading, anim.bend, t, speed,
-              anim.thrusting, anim.effort, palette[2])
+    # world -> art mapping: the sprite is centered on the body position
+    world_origin = (anim.pos.x - ART_SIZE / 2 / ART_PER_WORLD,
+                    anim.pos.y - ART_SIZE / 2 / ART_PER_WORLD)
+    draw_arms(art, center, cb.arms, world_origin, palette[2])
     draw_mantle(art, center, heading, anim.bend, squeeze, palette)
 
     big = pygame.transform.scale(art, (ART_SIZE * PIX, ART_SIZE * PIX))
@@ -332,14 +312,18 @@ def main() -> None:
     """Entry point: parse args, load the brains, run, save the brains."""
     args = session.parse_args("Octopus canvas", default_speed=1)
     brains = session.open_brains(args.fresh)
-    world = World(creatures=[CreatureBrain(
-        body=Creature(
-            pos=Vec(WIDTH / 2, HEIGHT / 2),
+    world = World(octopus=True, creatures=[CreatureBrain(
+        body=cr.Creature(
+            pos=cr.Vec(WIDTH / 2, HEIGHT / 2),
             heading=random.uniform(0, 6.283185307179586),
             hunger=30.0,
             starving=0.0,
         ),
         brain=brain,
+        arms=ob.create(
+            cr.Vec(WIDTH / 2, HEIGHT / 2),
+            random.uniform(0, 6.283185307179586),
+        ),
     ) for brain in brains])
     monitor = session.ProgressMonitor(world.brain)
     try:
