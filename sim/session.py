@@ -4,9 +4,9 @@ import argparse
 from pathlib import Path
 
 from .brain import QBrain
-from .maturity import MaturityConfig, MaturityReport, PlateauTracker, assess, coverage, ideal_rate
-from .sensors import N_STATES
 from .creature import N_DIRECTIONS
+from .maturity import MaturityConfig, MaturityReport, PlateauTracker, assess, ideal_rate
+from .sensors import N_STATES
 
 BRAIN_PATH = Path(__file__).resolve().parent.parent / "brain.json"
 PROGRESS_PATH = BRAIN_PATH.with_name("progress.tsv")
@@ -31,6 +31,26 @@ class ProgressMonitor:
         self._last_food = 0
         if not path.exists():
             path.write_text(LOG_HEADER + "\n")
+        else:
+            self._restore()
+
+    def _restore(self) -> None:
+        """Rebuild window history from the TSV log, so the HUD shows a stage
+        immediately instead of waiting 25k ticks for the first fresh window.
+
+        The plateau streak is deliberately not restored: a plateau must be
+        confirmed by windows closed in *this* session, otherwise a stale
+        verdict from an old run would stick around forever.
+        """
+        rows = self.path.read_text().splitlines()[1:]
+        for row in rows:
+            parts = row.split("\t")
+            if len(parts) >= 3:
+                self.tracker.rates.append(float(parts[1]))
+                self.ticks = int(parts[0])
+        self.tracker.best_rate = max(self.tracker.rates, default=0.0)
+        if self.tracker.rates:
+            self.latest = assess(self.brain, self.tracker)
 
     def snapshot(self) -> str:
         """Cheap one-line status: current window vs the all-time best.
@@ -50,7 +70,7 @@ class ProgressMonitor:
             core = f"window {projected:.2f} food/1k ({phase}, {ratio * 100:.0f}% of best)"
         else:
             core = f"window {projected:.2f} food/1k (no best yet)"
-        return f"{core}, states {coverage(self.brain)}/{N_STATES}"
+        return f"{core}, states {self.latest.coverage if self.latest else 0}/{self.latest.total_states if self.latest else 0} explored"
 
     def step(self, world_food: int) -> None:
         """Account one sim tick; log when a window just closed."""
@@ -73,7 +93,8 @@ class ProgressMonitor:
         """Full HUD status: live window progress, plus the last verdict if any."""
         line = f"growth: {self.snapshot()}"
         if self.latest is not None:
-            line += f" | last window: {self.latest.summary()}"
+            line += (f" | {self.latest.stage()}, "
+                     f"{self.latest.competence * 100:.0f}% of oracle")
         return line
 
 

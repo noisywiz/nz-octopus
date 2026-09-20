@@ -68,6 +68,13 @@ class QBrain:
         """How many distinct states the creature has ever observed."""
         return len(self.q)
 
+    def state_counts(self) -> dict[int, int]:
+        """Visits per state: any nonzero row means the state was observed,
+        and the number of nonzero cells in a row approximates visit volume
+        (a row with all actions explored was visited much more than one
+        touched once). Not an exact counter, but enough for coverage."""
+        return {s: sum(1 for v in row if v != 0.0) for s, row in self.q.items()}
+
     def save(self, path: Path) -> None:
         """Persist the table; tagged with a format version, not per-world params."""
         path.parent.mkdir(parents=True, exist_ok=True)

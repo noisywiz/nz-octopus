@@ -31,7 +31,7 @@ def main() -> None:
     rep = assess(world.brain, tracker)
     print(f"\nfinal: {rep.summary()}")
     print(f"mature={rep.mature} plateau={rep.plateau} "
-          f"coverage_ok={rep.coverage_ok} epsilon_ok={rep.epsilon_ok}")
+          f"coverage_ok={rep.coverage_ok} competence_ok={rep.competence_ok}")
     print(f"walltime {time.time() - start:.0f}s, bumps={world.wall_bumps}")
 
 
