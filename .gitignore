@@ -4,7 +4,7 @@ __pycache__/
 .venv/
 
 # learned brain (runtime artifact, not source)
-brain.json
+*.json
 
 # scratch previews
 preview_*.png
