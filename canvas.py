@@ -125,18 +125,17 @@ def draw_body(art: pygame.Surface, center: tuple[float, float],
 def draw_flagellum(art: pygame.Surface, center: tuple[float, float],
                    heading: float, t: float, speed: float,
                    tail_color: tuple[int, int, int]) -> None:
-    """Swimming-flagellum beat: a travelling wave growing toward the tip.
+    """Swimming-flagellum beat: one slow travelling wave along the tail.
 
-    Real flagella don't wag side-to-side like a stick: they send a wave
-    from base to tip, and amplitude *and* wavelength both grow along the
-    length. We approximate that with a phase that unwinds along the tail
-    and an amplitude curve that stays near zero at the root.
+    A real flagellum sends a single low-frequency wave from base to tip;
+    fast small ripples read as vibration, not swimming. The wave here is
+    slow (~1.2 Hz at full speed), the root barely moves, and the bend
+    grows smoothly toward the tip.
     """
     ax, ay = center
     body_edge = int(1.1 * SCALE / PIX) + 3
     tail_len = int(3.2 * SCALE / PIX)
-    # beat frequency scales with how hard the creature is actually swimming
-    phase = t * (4.0 + 10.0 * min(1.0, speed))
+    phase = t * 7.5 * min(1.0, max(0.15, speed))  # ~1.2 Hz at full swim
 
     def dot(px: float, py: float, r: int) -> None:
         for yy in range(int(py) - r, int(py) + r + 1):
@@ -149,12 +148,11 @@ def draw_flagellum(art: pygame.Surface, center: tuple[float, float],
         d = body_edge + i
         bx = ax - math.cos(heading) * d
         by = ay - math.sin(heading) * d
-        # wavelength stretches toward the tip (k shrinks), amplitude bends in
-        wave = math.sin(phase - u * (4.5 - 2.0 * u)) * (0.6 + 3.4 * u * u)
-        # add a slight backward sweep: the wave pushes water behind
-        sweep = 1.5 * u
-        bx += -math.sin(heading) * wave + math.cos(heading) * sweep * 0.3
-        by += math.cos(heading) * wave + math.sin(heading) * sweep * 0.3
+        # one long wave: wavelength constant, amplitude quadratic from a
+        # near-zero root — the tail bends, it never snaps sideways
+        wave = math.sin(phase - u * 2.2) * (0.4 + 3.2 * u * u)
+        bx += -math.sin(heading) * wave
+        by += math.cos(heading) * wave
         dot(bx, by, max(1, 2 - i // (tail_len // 2)))
 
 
@@ -168,10 +166,23 @@ def creature_speed(creature: Creature) -> float:
 
 def draw_bacterium(screen: pygame.Surface, world: World, t: float,
                    cb: CreatureBrain) -> None:
-    """One creature: trail + flagellum + body, upscaled with NEAREST."""
+    """One creature: trail + flagellum + body, upscaled with NEAREST.
+
+    The body position is interpolated between its last two trail points,
+    so motion stays smooth on screen even though the sim advances whole
+    ticks per frame.
+    """
     creature = cb.body
     palette = mood_palette_hunger(creature.hunger, creature.starving)
-    x, y = creature.pos.x * SCALE, creature.pos.y * SCALE
+    # render position: last trail edge, fractionally advanced by t phase
+    frac = (t * FPS) % 1.0
+    if len(creature.trail) >= 2:
+        prev, last = creature.trail[-2], creature.trail[-1]
+        rx = prev.x + (last.x - prev.x) * frac
+        ry = prev.y + (last.y - prev.y) * frac
+    else:
+        rx, ry = creature.pos.x, creature.pos.y
+    x, y = rx * SCALE, ry * SCALE
     heading = creature.heading
 
     draw_trail(screen, creature.trail, palette[0])
