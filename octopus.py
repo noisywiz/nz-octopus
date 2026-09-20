@@ -12,8 +12,8 @@ import pygame
 import aquarium as aqua
 from sim import World
 from sim import session
-from sim.animator import Animator
 from sim.creature import Creature, SWIM_SPEED, Vec
+from sim.jet import JetAnimator
 from sim.world import WIDTH, HEIGHT, CreatureBrain
 
 SCALE = 12  # pixels per world unit
@@ -63,11 +63,17 @@ def draw_disc(art: pygame.Surface, cx: float, cy: float, r: float,
 
 
 def draw_mantle(art: pygame.Surface, center: tuple[float, float],
-                heading: float, bend: float, palette: Palette) -> None:
-    """Head dome along a bowed spine: fat front, tapering rear, eyes."""
+                heading: float, bend: float, squeeze: float,
+                palette: Palette) -> None:
+    """Head dome along a bowed spine: fat front, tapering rear, eyes.
+
+    `squeeze` is 0..1 of mantle contraction during a jet pulse: the dome
+    squashes along its length and widens slightly, like a real pulse.
+    """
     mantle, mantle_dark, _, accent = palette
     ax, ay = center
-    half_length = 9  # art pixels from center to nose
+    half_length = 9 * (1.0 - 0.25 * squeeze)  # dome shortens when firing
+    fat = 8.0 * (1.0 + 0.15 * squeeze)  # ...and bulges sideways
     segments = 8
 
     def spine_h(u: float) -> float:
@@ -82,8 +88,8 @@ def draw_mantle(art: pygame.Surface, center: tuple[float, float],
     def radius_at(u: float) -> float:
         """Fat dome over the front half, tapering to the rear tip."""
         if u <= 0.45:
-            return 8.0
-        return max(2.5, 8.0 - (u - 0.45) * 13.0)
+            return fat
+        return max(2.5, fat - (u - 0.45) * 13.0)
 
     for i in range(segments + 1):
         u = i / segments
@@ -114,11 +120,18 @@ def draw_mantle(art: pygame.Surface, center: tuple[float, float],
 
 def draw_arms(art: pygame.Surface, center: tuple[float, float],
               heading: float, bend: float, t: float, speed: float,
+              thrusting: bool, effort: float,
               arm_color: tuple[int, int, int]) -> None:
-    """Eight arms fanned behind the body, each with a lazy travelling wave."""
+    """Eight reactive arms: stream behind in a thrust, relax into a fan
+    during the glide, gather under the body at rest.
+    """
     ax, ay = center
     rear_h = heading - math.pi - bend  # where the arms attach
     phase = t * 5.0 * min(1.0, max(0.2, speed))
+    # during a thrust the arms trail straight back and bunch together;
+    # while gliding they relax outward; at rest they droop into a fan
+    stream = effort if thrusting else 0.0
+    relax = (1.0 - effort) if thrusting else (0.35 + 0.4 * (1.0 - speed))
 
     def arm_dot(px: float, py: float, r: int) -> None:
         for yy in range(int(py) - r, int(py) + r + 1):
@@ -127,18 +140,20 @@ def draw_arms(art: pygame.Surface, center: tuple[float, float],
                     art.set_at((xx, yy), (*arm_color, 255))
 
     for arm in range(N_ARMS):
-        # fan: arms spread over ~200 degrees behind the body
-        spread = (arm / (N_ARMS - 1) - 0.5) * math.tau * 0.55
+        # fan width: squeezed shut while streaming, wide while relaxed
+        spread = (arm / (N_ARMS - 1) - 0.5) * math.tau * (0.55 * relax + 0.08)
         base_h = rear_h + spread
-        curl = 0.9 * (arm / (N_ARMS - 1) - 0.5)  # outer arms curl outward
+        # streaming arms curve less (they trail); relaxed arms curl outward
+        curl = (0.9 * (arm / (N_ARMS - 1) - 0.5)) * (1.0 - stream)
         for i in range(ARM_LEN):
             u = i / ARM_LEN
-            d = 4 + i  # start just behind the mantle
-            h = base_h + curl * u  # the arm curves along its length
+            d = 4 + i
+            h = base_h + curl * u
             px = ax + math.cos(h) * d
             py = ay + math.sin(h) * d
-            # travelling wave, amplitude grows toward the tip
-            wave = math.sin(phase - u * 3.0 + arm * 0.7) * (0.3 + 1.6 * u * u)
+            # wave: lively in a thrust, lazy in a glide, slow at rest
+            wave = math.sin(phase * (1.0 + stream) - u * 3.0 + arm * 0.7)
+            wave *= (0.3 + 1.6 * u * u) * (1.0 - 0.5 * stream)
             px += -math.sin(h) * wave
             py += math.cos(h) * wave
             arm_dot(px, py, max(1, 2 - i // (ARM_LEN // 2)))
@@ -157,18 +172,21 @@ def creature_speed(creature: Creature) -> float:
 
 
 def draw_octopus(screen: pygame.Surface, t: float,
-                 cb: CreatureBrain, anim: Animator) -> None:
+                 cb: CreatureBrain, anim: JetAnimator) -> None:
     """One octopus: arms behind, mantle in front, upscaled with NEAREST."""
     creature = cb.body
     palette = mood_palette_hunger(creature.hunger, creature.starving)
     x, y = anim.pos.x * SCALE, anim.pos.y * SCALE
     heading = anim.heading
     speed = creature_speed(creature)
+    # mantle contraction peaks mid-thrust
+    squeeze = anim.effort * (1.0 - anim.pulse_phase) if anim.thrusting else 0.0
 
     art = pygame.Surface((ART_SIZE, ART_SIZE), pygame.SRCALPHA)
     center = (ART_SIZE / 2, ART_SIZE / 2)
-    draw_arms(art, center, heading, anim.bend, t, speed, palette[2])
-    draw_mantle(art, center, heading, anim.bend, palette)
+    draw_arms(art, center, heading, anim.bend, t, speed,
+              anim.thrusting, anim.effort, palette[2])
+    draw_mantle(art, center, heading, anim.bend, squeeze, palette)
 
     big = pygame.transform.scale(art, (ART_SIZE * PIX, ART_SIZE * PIX))
     screen.blit(big, (round(x - big.get_width() / 2),
@@ -176,10 +194,10 @@ def draw_octopus(screen: pygame.Surface, t: float,
 
 
 def draw_all(screen: pygame.Surface, world: World, t: float,
-             animators: dict[int, Animator]) -> None:
+             animators: dict[int, JetAnimator]) -> None:
     """Every octopus, oldest first (newborns on top)."""
     for cb in world.creatures:
-        anim = animators.setdefault(cb.brain.id, Animator())
+        anim = animators.setdefault(cb.brain.id, JetAnimator())
         draw_octopus(screen, t, cb, anim)
 
 
@@ -267,7 +285,7 @@ def run(world: World, speed: int,
                             terrain=world.terrain)
     rng = random.Random()
     bubbles: list[aqua.Bubble] = []
-    animators: dict[int, Animator] = {}
+    animators: dict[int, JetAnimator] = {}
 
     paused = False
     t = 0.0
@@ -289,7 +307,7 @@ def run(world: World, speed: int,
                     if monitor is not None:
                         monitor.step(world.food_eaten)
                 for cb in world.creatures:
-                    animators.setdefault(cb.brain.id, Animator()).update(
+                    animators.setdefault(cb.brain.id, JetAnimator()).update(
                         cb.body, 1.0 / FPS,
                     )
                 aqua.step_bubbles(bubbles, -4.0, 1.0 / FPS, float(SCREEN[0]))
