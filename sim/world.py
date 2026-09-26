@@ -15,7 +15,7 @@ from . import octopus_body as ob
 from . import rewards as rw
 from . import sensors as sn
 from . import terrain as tn
-from .brain import QBrain, save_all
+from .brain import QBrain, conjugate, save_all
 from .creature import Creature
 from .geometry import distance
 
@@ -56,6 +56,8 @@ class World:
     food_eaten: int = 0
     wall_bumps: int = 0
     starvations: int = 0
+    conjugations: int = 0  # contact episodes that exchanged brain knowledge
+    touching: dict[tuple[int, int], bool] = field(default_factory=dict)
     episode_reward: float = 0.0
     recent_rewards: list[float] = field(default_factory=list)
 
@@ -121,6 +123,7 @@ class World:
         """One tick: every creature acts, moves, eats, metabolizes, learns."""
         for cb in self.creatures:
             self._step_creature(cb)
+        self._resolve_contacts()
         self._advance_food()
         self.ticks += 1
         self.episode_reward += sum(
@@ -143,13 +146,18 @@ class World:
         cb.brain.learn(state, action, reward.total, next_state)
         self._remember(reward.total)
 
-    def _handle_walls(self, c: cr.Creature) -> float:
-        """Clamp position, count first-contact bumps, run the escape reflex."""
+    def _clamp_body(self, c: cr.Creature) -> None:
+        """Keep a body inside the tank; bump counting lives in _handle_walls."""
         floor_line = HEIGHT - self.floor_height(c.pos.x) - WALL_MARGIN * 0.5
         c.pos = cr.Vec(
             x=min(WIDTH - WALL_MARGIN, max(WALL_MARGIN, c.pos.x)),
             y=min(HEIGHT - WALL_MARGIN, max(WALL_MARGIN, min(floor_line, c.pos.y))),
         )
+
+    def _handle_walls(self, c: cr.Creature) -> float:
+        """Clamp position, count first-contact bumps, run the escape reflex."""
+        self._clamp_body(c)
+        floor_line = HEIGHT - self.floor_height(c.pos.x) - WALL_MARGIN * 0.5
         at_v, at_h = cr.at_wall(c.pos, WALL_MARGIN, WIDTH, HEIGHT)
         at_h = at_h or c.pos.y >= floor_line
         bumped = (at_v or at_h) and not c.bumping
@@ -159,6 +167,26 @@ class World:
         if at_v or at_h:
             cr.wall_escape(c, WALL_MARGIN, WIDTH, HEIGHT, floor_line)
         return rw.wall_bump(bumped)
+
+    def _resolve_contacts(self) -> None:
+        """Pairwise soft collisions, plus conjugation while bodies touch.
+
+        Runs after every creature has moved: separation is symmetric, so
+        both bodies of a pair must already be at their final positions.
+        A push can shove a body past a wall, hence the re-clamp afterwards.
+        """
+        for i, a in enumerate(self.creatures):
+            for b in self.creatures[i + 1:]:
+                touching = cr.separate(a.body, b.body)
+                key = (a.brain.id, b.brain.id)
+                if touching:
+                    conjugate(a.brain, b.brain)
+                    conjugate(b.brain, a.brain)
+                    if not self.touching.get(key, False):
+                        self.conjugations += 1
+                self.touching[key] = touching
+        for cb in self.creatures:
+            self._clamp_body(cb.body)
 
     def _advance_food(self) -> None:
         """Sink every piece one tick, drop dissolved ones, spawn on rhythm."""

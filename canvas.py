@@ -19,6 +19,7 @@ SCALE = 12  # pixels per world unit
 FPS = 60
 PIX = 4  # size of one art pixel on screen -> chunky look
 ART_SIZE = 48  # art-surface side in art pixels
+BODY_RADIUS_PX = 5 * PIX  # draw_body's disc radius, on-screen pixels
 
 # palette: (body, body_dark, tail, accent) by mood
 HAPPY = ((168, 100, 240), (120, 66, 180), (110, 60, 200), (255, 214, 90))
@@ -28,6 +29,7 @@ WATER_TOP = (12, 24, 48)
 WATER_BOTTOM = (24, 60, 96)
 FOOD_COLOR = (196, 92, 224)
 FOOD_GLOW = (196, 92, 224, 40)
+CONJUGATION_COLOR = (255, 214, 90)
 TEXT = (200, 210, 230)
 
 SCREEN = (int(WIDTH * SCALE), int(HEIGHT * SCALE))
@@ -219,6 +221,40 @@ def draw_all(screen: pygame.Surface, world: World, t: float,
         draw_bacterium(screen, world, t, cb, anim)
 
 
+def draw_conjugations(screen: pygame.Surface, world: World,
+                      animators: dict[int, Animator], t: float) -> None:
+    """A soft halo under each pair of creatures whose bodies touch.
+
+    Gated on the sim's own contact state, not on smoothed render
+    positions: the animator lags the truth, so a distance check here
+    kept drawing the link after the pair had already bounced apart —
+    phantom dashes in open water. The halo sits under the bodies as one
+    glow covering the pair: dots or lines over the sprites read as
+    scratches, a merged halo reads as exchange.
+    """
+    cbs = world.creatures
+    for i, a in enumerate(cbs):
+        for b in cbs[i + 1:]:
+            if not world.touching.get((a.brain.id, b.brain.id), False):
+                continue
+            aa, ba = animators.get(a.brain.id), animators.get(b.brain.id)
+            if aa is None or ba is None:
+                continue
+            ax, ay = aa.pos.x * SCALE, aa.pos.y * SCALE
+            bx, by = ba.pos.x * SCALE, ba.pos.y * SCALE
+            mx, my = (ax + bx) / 2, (ay + by) / 2
+            r = math.hypot(bx - ax, by - ay) / 2 + BODY_RADIUS_PX
+            pulse = 0.5 + 0.5 * math.sin(t * 2.5)
+            glow = pygame.Surface((int(r) * 2 + PIX, int(r) * 2 + PIX),
+                                  pygame.SRCALPHA)
+            cx = cy = glow.get_width() // 2
+            for k in range(3):  # soft edge: three fading rings
+                alpha = int((12 + 16 * pulse) / (k + 1))
+                pygame.draw.circle(glow, (*CONJUGATION_COLOR, alpha),
+                                   (cx, cy), int(r) - k * PIX)
+            screen.blit(glow, (mx - cx, my - cy))
+
+
 def draw_light_shafts(screen: pygame.Surface, t: float) -> None:
     """Soft light shafts: wide translucent bands that drift and breathe."""
     shafts = pygame.Surface(SCREEN, pygame.SRCALPHA)
@@ -244,7 +280,7 @@ def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
     lines = [
         f"hunger {world.hunger:5.1f}   food {world.food_eaten}   "
         f"bumps {world.wall_bumps}   starved {world.starvations}   "
-        f"creatures {len(world.creatures)}",
+        f"conjugated {world.conjugations}   creatures {len(world.creatures)}",
         f"avg reward {world.recent_avg_reward:+.3f}   "
         f"curiosity {world.brain.config.epsilon:.3f}   "
         f"exp {world.brain.experience}",
@@ -321,6 +357,7 @@ def run(world: World, speed: int,
             draw_light_shafts(screen, t)
             aqua.draw_weeds(screen, weeds, t, FLOOR_Y, PIX, world.terrain)
             draw_food(screen, world, t)
+            draw_conjugations(screen, world, animators, t)
             draw_all(screen, world, t, animators)
             aqua.draw_bubbles(screen, bubbles, PIX)
             draw_stats(screen, font, world, speed, paused, monitor)

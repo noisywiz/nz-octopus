@@ -176,6 +176,35 @@ def reset_bump_flag(creature: Creature, at_v: bool, at_h: bool) -> None:
     creature.bumping = at_v or at_h
 
 
+CONTACT_RADIUS = 3.2  # centers closer than this = soft bodies touching;
+# matches the rendered body: discs of r=5 art px ≈ 1.67 units, so sprites
+# kiss at ~3.3 — anything smaller and bodies visibly overlap while "colliding"
+CONTACT_PUSH = 0.4  # max mutual push per tick; head-on pairs settle at
+# overlap = CONTACT_RADIUS * SWIM_SPEED / CONTACT_PUSH = 1.2 (a visible squish)
+
+
+def separate(a: Creature, b: Creature) -> bool:
+    """Soft body collision: push both apart in proportion to the overlap.
+
+    Purely physical: no heading change and no reward, so the policy can
+    neither sense nor cancel it — a body simply cannot overlap a neighbor.
+    The push scales with overlap, so a head-on pair squishes to a stop
+    instead of vibrating (a fixed push equal to SWIM_SPEED would cancel
+    the approach exactly and freeze them nose-to-nose).
+    """
+    dx, dy = b.pos.x - a.pos.x, b.pos.y - a.pos.y
+    d = math.hypot(dx, dy)
+    if d >= CONTACT_RADIUS:
+        return False
+    if d < 1e-6:  # exactly on top of each other: part along +x
+        dx, dy, d = 1.0, 0.0, 1.0
+    push = CONTACT_PUSH * (CONTACT_RADIUS - d) / CONTACT_RADIUS
+    ux, uy = dx / d, dy / d
+    a.pos = Vec(a.pos.x - ux * push, a.pos.y - uy * push)
+    b.pos = Vec(b.pos.x + ux * push, b.pos.y + uy * push)
+    return True
+
+
 def touch(point: Vec, food: Vec, radius: float) -> bool:
     """Is a piece of food within eating range?"""
     return math.hypot(food.x - point.x, food.y - point.y) < radius

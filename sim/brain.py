@@ -102,6 +102,28 @@ class QBrain:
         return brain
 
 
+CONJUGATION_RATE = 0.05  # fraction of a donor Q-value blended per contact tick
+
+
+def conjugate(donor: QBrain, receiver: QBrain, rate: float = CONJUGATION_RATE) -> int:
+    """Blend the donor's explored (state, action) values into the receiver.
+
+    Bacterial conjugation as social learning: on body contact knowledge
+    flows with no sensor and no reward signal. Only cells the donor has
+    actually explored (nonzero) are shared, so an untouched action never
+    drags the receiver's explored value toward zero. Returns the number
+    of cells shared.
+    """
+    shared = 0
+    for state, row in donor.q.items():
+        rec = receiver.row(state)
+        for action, value in enumerate(row):
+            if value != 0.0:
+                rec[action] += rate * (value - rec[action])
+                shared += 1
+    return shared
+
+
 def save_all(brains: list["QBrain"], path: Path) -> None:
     """Persist every creature's brain into one file, keyed by creature id."""
     path.parent.mkdir(parents=True, exist_ok=True)
