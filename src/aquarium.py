@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import pygame
 
-from sim import terrain as tn
+from src.sim import terrain as tn
 
 Color = tuple[int, int, int]
 

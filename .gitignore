@@ -8,6 +8,3 @@ __pycache__/
 
 # scratch previews
 preview_*.png
-
-# progress log (runtime artifact, like brain.json)
-progress.tsv

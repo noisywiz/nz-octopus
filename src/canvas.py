@@ -8,12 +8,12 @@ import random
 
 import pygame
 
-import aquarium as aqua
-from sim import World
-from sim import session
-from sim.animator import Animator
-from sim.creature import Creature, SWIM_SPEED, Vec
-from sim.world import WIDTH, HEIGHT, CreatureBrain
+from src import aquarium as aqua
+from src.sim import World
+from src.sim import session
+from src.sim.animator import Animator
+from src.sim.creature import Creature, SWIM_SPEED, Vec
+from src.sim.world import WIDTH, HEIGHT, CreatureBrain
 
 SCALE = 12  # pixels per world unit
 FPS = 60
@@ -274,23 +274,11 @@ def draw_light_shafts(screen: pygame.Surface, t: float) -> None:
 
 
 def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
-               world: World, speed: int, paused: bool,
-               monitor: session.ProgressMonitor | None) -> None:
-    """HUD lines in the top-left corner."""
-    lines = [
-        f"hunger {world.hunger:5.1f}   food {world.food_eaten}   "
-        f"bumps {world.wall_bumps}   starved {world.starvations}   "
-        f"conjugated {world.conjugations}   creatures {len(world.creatures)}",
-        f"avg reward {world.recent_avg_reward:+.3f}   "
-        f"curiosity {world.brain.config.epsilon:.3f}   "
-        f"exp {world.brain.experience}",
-    ]
-    if monitor is not None:
-        lines.append(monitor.hud_line())
-    lines.append(f"speed {speed}x {'[PAUSED]' if paused else ''}   "
-                 f"click spawn  +/- speed  space pause  s save  q quit")
-    for i, line in enumerate(lines):
-        screen.blit(font.render(line, True, TEXT), (10, 8 + i * 18))
+               speed: int, paused: bool) -> None:
+    """The only HUD line: controls, plus speed and pause state."""
+    line = (f"speed {speed}x {'[PAUSED]' if paused else ''}   "
+            "click spawn  f pour food  +/- speed  space pause  s save  q quit")
+    screen.blit(font.render(line, True, TEXT), (10, 8))
 
 
 def handle_key(key: int, speed: int, paused: bool) -> tuple[int, bool, bool]:
@@ -311,8 +299,7 @@ def screen_to_world(mx: int, my: int) -> tuple[float, float]:
     return mx / SCALE, my / SCALE
 
 
-def run(world: World, speed: int,
-        monitor: session.ProgressMonitor | None = None) -> None:
+def run(world: World, speed: int) -> None:
     """Main pygame loop: events, sim ticks, render, repeat."""
     pygame.init()
     screen = pygame.display.set_mode(SCREEN)
@@ -337,15 +324,18 @@ def run(world: World, speed: int,
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    speed, paused, running = handle_key(event.key, speed, paused)
+                    if event.key == pygame.K_f:
+                        world.pour_food()
+                    elif event.key == pygame.K_s:
+                        session.save_brains([cb.brain for cb in world.creatures])
+                    else:
+                        speed, paused, running = handle_key(event.key, speed, paused)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     wx, wy = screen_to_world(*event.pos)
                     world.spawn_at(wx, wy)
             if not paused:
                 for _ in range(speed):
                     world.step()
-                    if monitor is not None:
-                        monitor.step(world.food_eaten)
                 for cb in world.creatures:
                     animators.setdefault(cb.brain.id, Animator()).update(
                         cb.body, 1.0 / FPS,
@@ -360,34 +350,10 @@ def run(world: World, speed: int,
             draw_conjugations(screen, world, animators, t)
             draw_all(screen, world, t, animators)
             aqua.draw_bubbles(screen, bubbles, PIX)
-            draw_stats(screen, font, world, speed, paused, monitor)
+            draw_stats(screen, font, speed, paused)
             pygame.display.flip()
             clock.tick(FPS)
     except KeyboardInterrupt:
-        pass  # Ctrl-C exits cleanly; the brain is saved in main()
+        pass  # Ctrl-C exits cleanly; the brain is saved by the entry point
     finally:
         pygame.quit()
-
-
-def main() -> None:
-    """Entry point: parse args, load the brains, run, save the brains."""
-    args = session.parse_args("Bacterium canvas", default_speed=1)
-    brains = session.open_brains(args.fresh)
-    world = World(creatures=[CreatureBrain(
-        body=Creature(
-            pos=Vec(WIDTH / 2, HEIGHT / 2),
-            heading=random.uniform(0, 6.283185307179586),
-            hunger=30.0,
-            starving=0.0,
-        ),
-        brain=brain,
-    ) for brain in brains])
-    monitor = session.ProgressMonitor(world.brain)
-    try:
-        run(world, max(1, args.speed), monitor)
-    finally:
-        session.save_brains([cb.brain for cb in world.creatures])
-
-
-if __name__ == "__main__":
-    main()

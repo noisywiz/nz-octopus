@@ -11,7 +11,6 @@ from pathlib import Path
 from . import creature as cr
 from . import food as fd
 from . import metabolism as meta
-from . import octopus_body as ob
 from . import rewards as rw
 from . import sensors as sn
 from . import terrain as tn
@@ -23,6 +22,7 @@ WIDTH, HEIGHT = 80.0, 30.0
 ART_COLUMNS = int(WIDTH / tn.ART_TO_WORLD)  # tank width in art columns
 WALL_MARGIN = 1.0
 EAT_RADIUS = 2.0  # mouth with margin: near-miss arcs used to sail past food
+POUR_COUNT = 6  # pieces per pour keypress: a handful, not a flood
 REWARD_WINDOW = 500  # ticks in the rolling average-reward window
 
 
@@ -34,7 +34,6 @@ class CreatureBrain:
     brain: QBrain
     food_eaten: int = 0
     wall_bumps: int = 0
-    arms: ob.Arms | None = None  # octopus morphology; None for the bacterium
 
     def stats(self) -> tuple[float, int, int]:
         """(hunger, food_eaten, wall_bumps) lifetime counters."""
@@ -48,7 +47,6 @@ class World:
     rng: random.Random = field(default_factory=random.Random)
     terrain: list[int] = field(default_factory=lambda: tn.build(ART_COLUMNS))
     creatures: list[CreatureBrain] = field(default_factory=list)
-    octopus: bool = False  # morphology of newly spawned creatures
     next_id: int = 0
     food: list[fd.Food] = field(init=False)
     ticks: int = 0
@@ -66,7 +64,6 @@ class World:
         if not self.creatures:
             self.creatures.append(self._new_creature(
                 cr.Vec(WIDTH / 2, HEIGHT / 2),
-                octopus=self.octopus,
             ))
         self._adopt_ids()
 
@@ -89,7 +86,7 @@ class World:
 
     # --- construction helpers -------------------------------------------------
 
-    def _new_creature(self, pos: cr.Vec, octopus: bool = False) -> CreatureBrain:
+    def _new_creature(self, pos: cr.Vec) -> CreatureBrain:
         """A rested creature with an empty brain, facing a random direction."""
         brain = QBrain(sn.N_STATES, cr.N_DIRECTIONS)
         brain.id = self.next_id
@@ -103,7 +100,6 @@ class World:
                 starving=0.0,
             ),
             brain=brain,
-            arms=ob.create(pos, heading) if octopus else None,
         )
 
     def floor_height(self, x: float) -> float:
@@ -117,9 +113,18 @@ class World:
             x=min(WIDTH - WALL_MARGIN, max(WALL_MARGIN, x)),
             y=min(floor_line, max(WALL_MARGIN, y)),
         )
-        creature = self._new_creature(pos, octopus=self.octopus)
+        creature = self._new_creature(pos)
         self.creatures.append(creature)
         return creature
+
+    def pour_food(self, count: int = POUR_COUNT) -> None:
+        """Sprinkle a handful of pieces from the surface (the f key).
+
+        Deliberately ignores MAX_PIECES: the cap throttles the passive
+        rhythm, while a pour is an explicit feeding decision.
+        """
+        for _ in range(count):
+            self.food.append(self._spawn_food())
 
     def _spawn_food(self) -> fd.Food:
         """A new piece dropping from the surface."""
@@ -221,13 +226,7 @@ class World:
             self.ticks_since_spawn = 0
 
     def _eat(self, cb: CreatureBrain) -> float:
-        """Feeding for the creature's morphology.
-
-        The bacterium swallows on body contact; the octopus must catch a
-        piece with an arm tip and carry it to the mouth.
-        """
-        if cb.arms is not None:
-            return self._arms_feeding(cb)
+        """Feeding: the bacterium swallows every piece within body reach."""
         return self._contact_eating(cb.body)
 
     def _contact_eating(self, c: cr.Creature) -> float:
@@ -239,92 +238,6 @@ class World:
                 c.hunger = meta.fed(c.hunger, f.energy)
                 self.food_eaten += 1
                 ate = True
-        return rw.food_reward(ate)
-
-    def _arms_feeding(self, cb: CreatureBrain) -> float:
-        """Octopus: arms reach for food, grip it, and feed it to the mouth."""
-        assert cb.arms is not None  # checked by the caller
-        body = cb.body
-        mouth = ob.mouth_point(body.pos, body.heading)
-        self._step_arms(cb.arms, body.pos, body.heading, mouth)
-        return self._swallow(cb, mouth)
-
-    def _step_arms(self, arms: ob.Arms, pos: cr.Vec, heading: float,
-                   mouth: cr.Vec) -> None:
-        """Advance every arm one tick: carry, reach, or sway at rest."""
-        ob.claim_food(arms, self.food)
-        for arm in arms.limbs:
-            base = ob.base_point(pos, heading, arm.index)
-            if arm.holding is not None:
-                target = mouth
-                speed = ob.CARRY_SPEED
-            else:
-                target = self._reach_target(arm, base, pos, heading)
-                speed = ob.TIP_SPEED
-            arm.joints = ob.move_tip(arm, base, target, speed)
-            self._grip(arm)
-
-    def _reach_target(self, arm: ob.Arm, base: cr.Vec, pos: cr.Vec,
-                      heading: float) -> cr.Vec:
-        """Where a free arm wants its tip: its claimed piece, or a rest pose.
-
-        A claimed piece is chased until it is gripped or drifts beyond
-        reach*1.3 — no per-tick re-evaluation, so the tip never oscillates
-        between two goals.
-        """
-        piece = self._piece_by_fid(arm.target_fid)
-        if piece is not None:
-            d = distance(pos.x, pos.y, piece.pos.x, piece.pos.y)
-            if d <= ob.REACH * ob.GRASP_MARGIN * 1.3:
-                return piece.pos
-            arm.target_fid = None  # out of reach: rest until re-claimed
-            return ob.rest_tip(base, heading, arm.index, self.ticks)
-        if arm.target_fid is not None:
-            arm.target_fid = None  # piece dissolved: release the claim
-        return ob.rest_tip(base, heading, arm.index, self.ticks)
-
-    def _piece_by_fid(self, fid: int | None) -> fd.Food | None:
-        """The current object for a piece id, or None if it's gone."""
-        if fid is None:
-            return None
-        return next((f for f in self.food if f.fid == fid), None)
-
-    def _grip(self, arm: ob.Arm) -> None:
-        """Grab a piece with the tip, or track the one already held.
-
-        A gripped piece leaves the world's food list: the arm owns it now,
-        so it stops sinking, stops smelling and can't be retargeted. The
-        grab itself is claim-agnostic: a tip that touches a piece grabs it
-        even if the claim was lost a tick earlier — otherwise near-misses
-        would starve a creature whose tip is literally on the food.
-        """
-        tip = ob.tip_of(arm)
-        if arm.holding is not None:
-            arm.carry = tip
-            return
-        near = ob.nearest_food(tip, self.food)
-        if near is not None and near[1] <= ob.GRAB_RADIUS:
-            piece = self.food[near[0]]
-            arm.holding = piece
-            arm.carry = tip
-            arm.target_fid = piece.fid
-            self.food.remove(piece)
-
-    def _swallow(self, cb: CreatureBrain, mouth: cr.Vec) -> float:
-        """Consume any piece an arm has delivered to the mouth."""
-        assert cb.arms is not None  # checked by the caller
-        ate = False
-        for arm in cb.arms.limbs:
-            if arm.holding is None or arm.carry is None:
-                continue
-            if distance(arm.carry.x, arm.carry.y, mouth.x, mouth.y) > ob.MOUTH_RADIUS:
-                continue
-            cb.body.hunger = meta.fed(cb.body.hunger, arm.holding.energy)
-            self.food_eaten += 1
-            ate = True
-            arm.holding = None
-            arm.carry = None
-            arm.target_fid = None
         return rw.food_reward(ate)
 
     def _handle_metabolism(self, c: cr.Creature) -> meta.MetabolicReport:

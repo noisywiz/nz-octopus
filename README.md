@@ -1,59 +1,41 @@
 # nz-octopus
 
-2D-аквариум, в котором живёт одно существо с табличным Q-learning мозгом.
-Оно рождается полностью случайным и учится всю жизнь: искать еду по запаху,
-избегать стен и не гибнуть от голода. Мозг сохраняется в `brain.json` —
-существо помнит опыт между запусками.
+> **Note:** this project is written entirely by an LLM (AI-generated code);
+> a human directs it and reviews the results.
 
-## Запуск
+A 2D aquarium where bacteria live with tabular Q-learning brains.
+They are born fully random and learn for life: find food by smell,
+avoid the walls, and survive hunger. Brains are saved to `brains.json` —
+a colony remembers its experience across runs.
+
+## Run
 
 ```bash
-uv run canvas.py          # pygame-окно с пиксель-арт бактерией
-uv run canvas.py --fresh  # существо рождается заново (пустой мозг)
-uv run tui.py             # смотреть в терминале (rich)
-uv run tui.py --speed 50  # больше тиков на кадр (быстрее обучение)
+uv run main.py          # a fresh colony; brains.json is neither read nor written
+uv run main.py --brain  # resume the saved brains and save on exit
+uv run python -m unittest discover  # tests
 ```
 
-В canvas: `+/-` скорость, `space` пауза, `s` сохранить мозг, `q` выход.
-Мозг также сохраняется при выходе (включая Ctrl-C).
+In the canvas: `f` pour food, `+/-` speed, `space` pause, `s` save the
+brains to `brains.json`, `q` quit.
+Without `--brain` the file is written only when you press `s`; with the
+flag it is also saved on exit (including Ctrl-C).
 
-## Как устроено
+State (36 variants): smell gradient (rising/falling/flat) × side
+(left/right/symmetric) × proximity (4 levels). Actions: 8 swimming
+directions + rest. A creature cannot see food through the water — it only
+smells it.
 
-```
-sim/
-├── brain.py       Q-таблица: ε-greedy, затухающий lr; save/load в JSON
-├── geometry.py    чистая геометрия: углы, повороты, дистанции
-├── creature.py    тело и движение: плавные повороты, слабость, стены,
-│                 мягкие столкновения существ
-├── sensors.py     хемотаксис: запах еды, три рецептора, дискретизация
-├── metabolism.py  голод: рост, насыщение, старение без смерти
-├── rewards.py     награды: +10 еда, −2 стук о стену, −0.3 за рост голода
-├── brain.py       Q-таблица: ε-greedy, затухающий lr; конъюгация — обмен
-│                 опытом при контакте; save/load в JSON
-├── world.py       оркестратор: один тик = act → move → collide → eat → learn
-└── session.py     общая логика вьюеров: аргументы, загрузка/сохранение мозга
-```
+Aging: past hunger 75 a creature grays out and slows down (down to 40%
+speed) but never dies. Food fully restores its strength.
 
-Состояние (36 вариантов): градиент запаха (растёт/падает/плоско) × сторона
-(слева/справа/симметрично) × близость (4 уровня). Действия: 8 направлений
-плавания + отдых. Существо не видит еду насквозь — только нюхает.
+Multiple creatures (click the window to spawn one): they push each other
+softly on contact (pure physics, no sensors, no rewards) and "conjugate" —
+they exchange Q-table cells the way bacteria swap plasmids. Knowledge
+flows to whoever does not have it yet.
 
-Старение: после голода 75 существо сереет и замедляется (до 40% скорости),
-но никогда не умирает. Еда полностью восстанавливает силы.
+## What to watch
 
-Несколько существ (клик по окну — новое): мягко отталкиваются при контакте
-(чистая физика, без сенсоров и наград) и «конъюгируют» — обмениваются
-ячейками Q-таблиц, как бактерии плазмидами. Знание перетекает к тому,
-кто его ещё не имеет.
-
-## Что наблюдать
-
-Молодое существо мечется хаотично. Через несколько минут симуляции начинает
-целенаправленно идти по градиенту запаха — следи за «avg reward» и
-«curiosity» в панели статистики.
-
-## Идеи на будущее
-
-- Память последних состояний (частичное наблюдение)
-- Укрытия, хищник, «чернила» при испуге
-- Больше сенсоров: слух, другие существа
+A young creature darts around chaotically. After a few minutes of
+simulation it starts climbing the smell gradient purposefully; the canvas
+screen shows only the controls hint.
