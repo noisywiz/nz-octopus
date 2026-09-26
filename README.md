@@ -13,9 +13,7 @@ a colony remembers its experience across runs.
 ## Run
 
 ```bash
-uv run main.py          # a fresh colony; brains.json is neither read nor written
-uv run main.py --brain  # resume the saved brains and save on exit
-uv run python -m unittest discover  # tests
+uv run main.py
 ```
 
 In the canvas: `f` pour food, `+/-` speed, `space` pause, `s` save the
