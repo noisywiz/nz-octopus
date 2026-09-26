@@ -8,6 +8,8 @@ They are born fully random and learn for life: find food by smell,
 avoid the walls, and survive hunger. Brains are saved to `brains.json` —
 a colony remembers its experience across runs.
 
+![The aquarium: chunky pixel-art bacteria chasing glowing food](screenshot.png)
+
 ## Run
 
 ```bash
