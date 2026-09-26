@@ -300,8 +300,7 @@ def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
                speed: int, paused: bool) -> None:
     """The only HUD line: controls, plus speed and pause state."""
     line = (f"speed {speed}x {'[PAUSED]' if paused else ''}   "
-            "click spawn  f pour food  +/- speed  space pause  s save  "
-            "f11 fullscreen  q quit")
+            "click — spawn   f — food   +/- — speed   space — pause")
     screen.blit(font.render(line, True, TEXT), (10, 8))
 
 
