@@ -17,7 +17,10 @@ uv run python -m unittest discover  # tests
 ```
 
 In the canvas: `f` pour food, `+/-` speed, `space` pause, `s` save the
-brains to `brains.json`, `q` quit.
+brains to `brains.json`, `f11` fullscreen, `q` quit.
+The window is freely resizable (maximize button, `f11`): the tank itself
+grows or shrinks to match at the same zoom — more screen means more water,
+the dunes rebuild, and everything clamps into the new bounds.
 Without `--brain` the file is written only when you press `s`; with the
 flag it is also saved on exit (including Ctrl-C).
 

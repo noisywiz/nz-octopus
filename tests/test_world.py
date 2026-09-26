@@ -5,6 +5,7 @@ import random
 import unittest
 
 from src.sim import world as wd
+from src.sim import terrain as tn
 from src.sim.creature import Creature, Vec
 from src.sim.world import CreatureBrain
 from tests.helpers import make_brain, make_world
@@ -98,6 +99,31 @@ class PourFoodTest(unittest.TestCase):
                          "pour must add exactly POUR_COUNT pieces")
         w.pour_food(2)
         self.assertEqual(len(w.food), before + wd.POUR_COUNT + 2)
+
+
+class ResizeTest(unittest.TestCase):
+    def test_resize_grows_shrinks_and_clamps(self) -> None:
+        w = make_world([CreatureBrain(
+            body=Creature(pos=Vec(40.0, 15.0), heading=0.0,
+                          hunger=30.0, starving=0.0),
+            brain=make_brain(),
+        )])
+        w.pour_food(3)
+        w.resize(160.0, 60.0)
+        self.assertEqual(w.width, 160.0)
+        self.assertEqual(len(w.terrain), int(160.0 / tn.ART_TO_WORLD),
+                         "terrain must be rebuilt for the new width")
+        w.step()  # sim must run in the bigger tank without escaping it
+        for cb in w.creatures:
+            self.assertLessEqual(cb.body.pos.x, w.width - wd.WALL_MARGIN)
+        w.resize(20.0, 10.0)
+        for cb in w.creatures:  # shrink: bodies clamped back inside
+            self.assertGreaterEqual(cb.body.pos.x, wd.WALL_MARGIN)
+            self.assertLessEqual(cb.body.pos.x, w.width - wd.WALL_MARGIN)
+            self.assertGreaterEqual(cb.body.pos.y, wd.WALL_MARGIN)
+        self.assertTrue(all(wd.WALL_MARGIN <= f.pos.x <= w.width - wd.WALL_MARGIN
+                            for f in w.food),
+                        "food outside the shrunk tank must be dropped")
 
 
 if __name__ == "__main__":

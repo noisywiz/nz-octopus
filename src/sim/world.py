@@ -45,6 +45,8 @@ class World:
     """A tank with any number of creatures sharing one food economy."""
 
     rng: random.Random = field(default_factory=random.Random)
+    width: float = WIDTH
+    height: float = HEIGHT
     terrain: list[int] = field(default_factory=lambda: tn.build(ART_COLUMNS))
     creatures: list[CreatureBrain] = field(default_factory=list)
     next_id: int = 0
@@ -61,11 +63,32 @@ class World:
 
     def __post_init__(self) -> None:
         self.food = []  # the tank starts empty; pieces drop in one by one
+        self._rebuild_terrain()
         if not self.creatures:
             self.creatures.append(self._new_creature(
-                cr.Vec(WIDTH / 2, HEIGHT / 2),
+                cr.Vec(self.width / 2, self.height / 2),
             ))
         self._adopt_ids()
+
+    def resize(self, width: float, height: float) -> None:
+        """Grow or shrink the tank to match the window (same zoom).
+
+        The dune heightmap is rebuilt for the new width — it is a pure
+        function of the column count, so physics and pixel art stay in
+        agreement. Bodies and food outside the new bounds are clamped in.
+        """
+        self.width, self.height = width, height
+        self._rebuild_terrain()
+        for cb in self.creatures:
+            self._clamp_body(cb.body)
+        self.food = [f for f in self.food
+                     if WALL_MARGIN <= f.pos.x <= width - WALL_MARGIN]
+
+    def _rebuild_terrain(self) -> None:
+        """Regenerate the dune heightmap for the current tank width."""
+        columns = max(1, int(self.width / tn.ART_TO_WORLD))
+        if len(self.terrain) != columns:
+            self.terrain = tn.build(columns)
 
     def _adopt_ids(self) -> None:
         """Make creature ids unique and move next_id past all of them.
@@ -104,13 +127,13 @@ class World:
 
     def floor_height(self, x: float) -> float:
         """Dune height in world units at world x (0 = flat baseline)."""
-        return tn.height_at_world(self.terrain, x, WIDTH)
+        return tn.height_at_world(self.terrain, x, self.width)
 
     def spawn_at(self, x: float, y: float) -> CreatureBrain:
         """Birth by click: a new creature with an empty brain at a point."""
-        floor_line = HEIGHT - self.floor_height(x) - WALL_MARGIN * 0.5
+        floor_line = self.height - self.floor_height(x) - WALL_MARGIN * 0.5
         pos = cr.Vec(
-            x=min(WIDTH - WALL_MARGIN, max(WALL_MARGIN, x)),
+            x=min(self.width - WALL_MARGIN, max(WALL_MARGIN, x)),
             y=min(floor_line, max(WALL_MARGIN, y)),
         )
         creature = self._new_creature(pos)
@@ -128,7 +151,7 @@ class World:
 
     def _spawn_food(self) -> fd.Food:
         """A new piece dropping from the surface."""
-        return fd.spawn(self.rng, WIDTH)
+        return fd.spawn(self.rng, self.width)
 
     # --- senses ----------------------------------------------------------------
 
@@ -171,24 +194,25 @@ class World:
 
     def _clamp_body(self, c: cr.Creature) -> None:
         """Keep a body inside the tank; bump counting lives in _handle_walls."""
-        floor_line = HEIGHT - self.floor_height(c.pos.x) - WALL_MARGIN * 0.5
+        floor_line = self.height - self.floor_height(c.pos.x) - WALL_MARGIN * 0.5
         c.pos = cr.Vec(
-            x=min(WIDTH - WALL_MARGIN, max(WALL_MARGIN, c.pos.x)),
-            y=min(HEIGHT - WALL_MARGIN, max(WALL_MARGIN, min(floor_line, c.pos.y))),
+            x=min(self.width - WALL_MARGIN, max(WALL_MARGIN, c.pos.x)),
+            y=min(self.height - WALL_MARGIN,
+                  max(WALL_MARGIN, min(floor_line, c.pos.y))),
         )
 
     def _handle_walls(self, c: cr.Creature) -> float:
         """Clamp position, count first-contact bumps, run the escape reflex."""
         self._clamp_body(c)
-        floor_line = HEIGHT - self.floor_height(c.pos.x) - WALL_MARGIN * 0.5
-        at_v, at_h = cr.at_wall(c.pos, WALL_MARGIN, WIDTH, HEIGHT)
+        floor_line = self.height - self.floor_height(c.pos.x) - WALL_MARGIN * 0.5
+        at_v, at_h = cr.at_wall(c.pos, WALL_MARGIN, self.width, self.height)
         at_h = at_h or c.pos.y >= floor_line
         bumped = (at_v or at_h) and not c.bumping
         c.bumping = at_v or at_h
         if bumped:
             self.wall_bumps += 1
         if at_v or at_h:
-            cr.wall_escape(c, WALL_MARGIN, WIDTH, HEIGHT, floor_line)
+            cr.wall_escape(c, WALL_MARGIN, self.width, self.height, floor_line)
         return rw.wall_bump(bumped)
 
     def _resolve_contacts(self) -> None:
@@ -215,8 +239,8 @@ class World:
         """Sink every piece one tick, drop dissolved ones, spawn on rhythm."""
         alive: list[fd.Food] = []
         for f in self.food:
-            sunk = fd.sunk(f, self.rng, WIDTH,
-                           HEIGHT - self.floor_height(f.pos.x))
+            sunk = fd.sunk(f, self.rng, self.width,
+                           self.height - self.floor_height(f.pos.x))
             if sunk is not None:
                 alive.append(sunk)
         self.food = alive

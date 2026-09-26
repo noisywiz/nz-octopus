@@ -58,9 +58,6 @@ def lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tu
     return tuple(int(x + (y - x) * t) for x, y in zip(a, b))  # type: ignore[return-value]
 
 
-FLOOR_Y = SCREEN[1] - int(1.2 * SCALE)
-
-
 def draw_background(screen: pygame.Surface, backdrop: pygame.Surface) -> None:
     """Static aquarium backdrop."""
     screen.blit(backdrop, (0, 0))
@@ -257,18 +254,19 @@ def draw_conjugations(screen: pygame.Surface, world: World,
 
 def draw_light_shafts(screen: pygame.Surface, t: float) -> None:
     """Soft light shafts: wide translucent bands that drift and breathe."""
-    shafts = pygame.Surface(SCREEN, pygame.SRCALPHA)
+    win_w, win_h = screen.get_size()
+    shafts = pygame.Surface((win_w, win_h), pygame.SRCALPHA)
     for i in range(3):
         drift = math.sin(t * 0.05 + i * 2.1) * 40.0
         breathe = 0.5 + 0.5 * math.sin(t * 0.11 + i * 1.3)
-        x0 = SCREEN[0] * (0.22 + 0.28 * i) + drift
+        x0 = win_w * (0.22 + 0.28 * i) + drift
         tilt = 0.45 + 0.1 * i
         top_half = 50.0 + 18.0 * i
         alpha = int(7 + 6 * breathe)
         pygame.draw.polygon(shafts, (210, 230, 255, alpha), [
             (x0 - top_half, 0), (x0 + top_half, 0),
-            (x0 + top_half + tilt * SCREEN[1], SCREEN[1]),
-            (x0 - top_half + tilt * SCREEN[1], SCREEN[1]),
+            (x0 + top_half + tilt * win_h, win_h),
+            (x0 - top_half + tilt * win_h, win_h),
         ])
     screen.blit(shafts, (0, 0))
 
@@ -277,8 +275,19 @@ def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
                speed: int, paused: bool) -> None:
     """The only HUD line: controls, plus speed and pause state."""
     line = (f"speed {speed}x {'[PAUSED]' if paused else ''}   "
-            "click spawn  f pour food  +/- speed  space pause  s save  q quit")
+            "click spawn  f pour food  +/- speed  space pause  s save  "
+            "f11 fullscreen  q quit")
     screen.blit(font.render(line, True, TEXT), (10, 8))
+
+
+def set_display(fullscreen: bool) -> pygame.Surface:
+    """(Re)create the display. The window is freely resizable (maximize
+    button works); on every resize the world itself grows or shrinks to
+    match at the same zoom, so the tank always fills the window."""
+    flags = pygame.RESIZABLE
+    if fullscreen:
+        flags |= pygame.FULLSCREEN
+    return pygame.display.set_mode(SCREEN, flags)
 
 
 def handle_key(key: int, speed: int, paused: bool) -> tuple[int, bool, bool]:
@@ -299,17 +308,32 @@ def screen_to_world(mx: int, my: int) -> tuple[float, float]:
     return mx / SCALE, my / SCALE
 
 
+def floor_y_for(world: World) -> int:
+    """Sand baseline on screen: the tank bottom minus a floor band."""
+    return int(world.height * SCALE) - int(1.2 * SCALE)
+
+
 def run(world: World, speed: int) -> None:
     """Main pygame loop: events, sim ticks, render, repeat."""
     pygame.init()
-    screen = pygame.display.set_mode(SCREEN)
+    fullscreen = False
+    screen = set_display(fullscreen)
     pygame.display.set_caption("nz-octopus")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("monospace", 14)
-    backdrop = aqua.build_backdrop(SCREEN[0], SCREEN[1], PIX, FLOOR_Y,
-                                   (WATER_TOP, WATER_BOTTOM), world.terrain)
-    weeds = aqua.make_weeds(SCREEN[0], FLOOR_Y, PIX, count=7, seed=42,
-                            terrain=world.terrain)
+
+    def build_scenery() -> tuple[pygame.Surface, list[aqua.Weed], int]:
+        """Build everything sized in pixels for the current tank dims."""
+        win_w = int(world.width * SCALE)
+        floor_y = floor_y_for(world)
+        backdrop = aqua.build_backdrop(win_w, int(world.height * SCALE), PIX,
+                                       floor_y, (WATER_TOP, WATER_BOTTOM),
+                                       world.terrain)
+        weeds = aqua.make_weeds(win_w, floor_y, PIX, count=7, seed=42,
+                                terrain=world.terrain)
+        return backdrop, weeds, floor_y
+
+    backdrop, weeds, floor_y = build_scenery()
     rng = random.Random()
     bubbles: list[aqua.Bubble] = []
     animators: dict[int, Animator] = {}
@@ -320,19 +344,35 @@ def run(world: World, speed: int) -> None:
     try:
         while running:
             t += 1.0 / FPS
+            scenery_dirty = False
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_f:
+                    if event.key == pygame.K_F11:
+                        fullscreen = not fullscreen
+                        screen = set_display(fullscreen)
+                    elif event.key == pygame.K_f:
                         world.pour_food()
                     elif event.key == pygame.K_s:
                         session.save_brains([cb.brain for cb in world.creatures])
                     else:
                         speed, paused, running = handle_key(event.key, speed, paused)
+                elif event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
+                    # the tank itself follows the window at a fixed zoom:
+                    # more screen means more water, not a stretched picture
+                    if event.type == pygame.WINDOWRESIZED:
+                        ew, eh = event.x, event.y  # window events use x/y
+                    else:
+                        ew, eh = event.w, event.h  # legacy VIDEORESIZE uses w/h
+                    world.resize(max(1.0, ew / SCALE), max(1.0, eh / SCALE))
+                    scenery_dirty = True
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     wx, wy = screen_to_world(*event.pos)
                     world.spawn_at(wx, wy)
+            if scenery_dirty:
+                backdrop, weeds, floor_y = build_scenery()
+            win_w, win_h = screen.get_size()
             if not paused:
                 for _ in range(speed):
                     world.step()
@@ -340,12 +380,12 @@ def run(world: World, speed: int) -> None:
                     animators.setdefault(cb.brain.id, Animator()).update(
                         cb.body, 1.0 / FPS,
                     )
-                aqua.step_bubbles(bubbles, -4.0, 1.0 / FPS, float(SCREEN[0]))
+                aqua.step_bubbles(bubbles, -4.0, 1.0 / FPS, float(win_w))
                 if random.random() < 0.05:
-                    aqua.spawn_bubble(bubbles, SCREEN[0], FLOOR_Y, rng)
+                    aqua.spawn_bubble(bubbles, win_w, floor_y, rng)
             draw_background(screen, backdrop)
             draw_light_shafts(screen, t)
-            aqua.draw_weeds(screen, weeds, t, FLOOR_Y, PIX, world.terrain)
+            aqua.draw_weeds(screen, weeds, t, floor_y, PIX, world.terrain)
             draw_food(screen, world, t)
             draw_conjugations(screen, world, animators, t)
             draw_all(screen, world, t, animators)
