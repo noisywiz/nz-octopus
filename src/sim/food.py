@@ -90,6 +90,12 @@ def landed(food: Food, height: float) -> bool:
     return food.y >= height - FLOOR_PAD
 
 
-def spawn_due(piece_count: int, ticks_since_last: int) -> bool:
-    """Time for the next piece: one at a time, on a steady rhythm."""
-    return piece_count < MAX_PIECES and ticks_since_last >= SPAWN_INTERVAL
+def spawn_due(piece_count: int, ticks_since_last: int, cap: float = MAX_PIECES,
+              interval: float = SPAWN_INTERVAL) -> bool:
+    """Time for the next piece: one at a time, on a steady rhythm.
+
+    The cap and interval are parameters so a narrow tank can receive
+    food more slowly than the default: the same rhythm in a sliver of
+    water piles every piece at the top.
+    """
+    return piece_count < cap and ticks_since_last >= interval

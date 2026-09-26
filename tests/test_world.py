@@ -5,6 +5,7 @@ import random
 import unittest
 
 from src.sim import world as wd
+from src.sim import food as fd
 from src.sim import terrain as tn
 from src.sim.creature import Creature, Vec
 from src.sim.world import CreatureBrain
@@ -99,6 +100,70 @@ class PourFoodTest(unittest.TestCase):
                          "pour must add exactly POUR_COUNT pieces")
         w.pour_food(2)
         self.assertEqual(len(w.food), before + wd.POUR_COUNT + 2)
+
+    def test_pour_scales_with_tank_width(self) -> None:
+        """A narrow tank gets a smaller handful: no clog at the surface."""
+        w = make_world([CreatureBrain(
+            body=Creature(pos=Vec(wd.WIDTH / 2, wd.HEIGHT / 2), heading=0.0,
+                          hunger=30.0, starving=0.0),
+            brain=make_brain(),
+        )])
+        w.resize(20.0, wd.HEIGHT)
+        before = len(w.food)
+        w.pour_food()
+        added = len(w.food) - before
+        self.assertGreaterEqual(added, 1)
+        self.assertLess(added, wd.POUR_COUNT,
+                        "a narrow tank must receive a smaller handful")
+
+    def test_narrow_tank_spawns_food_slower(self) -> None:
+        w = make_world([CreatureBrain(
+            body=Creature(pos=Vec(wd.WIDTH / 2, wd.HEIGHT / 2), heading=0.0,
+                          hunger=30.0, starving=0.0),
+            brain=make_brain(),
+        )])
+        w.resize(20.0, wd.HEIGHT)
+        w.ticks_since_spawn = fd.SPAWN_INTERVAL  # due by the default rhythm
+        w.step()
+        self.assertEqual(len(w.food), 0,
+                         "a narrow tank must wait longer between pieces")
+
+
+class FoodCapTest(unittest.TestCase):
+    def _world(self) -> wd.World:
+        return make_world([CreatureBrain(
+            body=Creature(pos=Vec(wd.WIDTH / 2, wd.HEIGHT / 2), heading=0.0,
+                          hunger=30.0, starving=0.0),
+            brain=make_brain(),
+        )])
+
+    def test_eating_above_cap_draws_surplus_down(self) -> None:
+        """A pour floods the tank; eating must reduce it, not respawn 1:1."""
+        w = self._world()
+        w.pour_food()
+        flooded = len(w.food)
+        self.assertGreater(flooded, w.food_cap,
+                           "precondition: the pour must exceed the cap")
+        w.ticks_since_spawn = 0  # keep the passive rhythm out of the assertion
+        c = w.creatures[0].body
+        c.pos = w.food[0].pos  # sit right on a piece
+        w.step()
+        self.assertLess(len(w.food), flooded,
+                        "eating above the cap must consume the surplus")
+
+    def test_cap_scales_with_tank_area(self) -> None:
+        w = self._world()
+        self.assertAlmostEqual(w.food_cap, fd.MAX_PIECES)
+        w.resize(wd.WIDTH / 2, wd.HEIGHT / 2)
+        self.assertLess(w.food_cap, fd.MAX_PIECES,
+                        "a shrunken tank must hold fewer pieces")
+
+    def test_shrink_drops_food_below_the_new_floor(self) -> None:
+        w = self._world()
+        w.food.append(fd.Food(base_x=40.0, y=25.0, phase=0.0))
+        w.resize(wd.WIDTH, 10.0)
+        self.assertFalse(any(f.pos.y > 10.0 for f in w.food),
+                         "food below the shrunken floor must be dropped")
 
 
 class ResizeTest(unittest.TestCase):

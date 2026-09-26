@@ -81,8 +81,14 @@ class World:
         self._rebuild_terrain()
         for cb in self.creatures:
             self._clamp_body(cb.body)
-        self.food = [f for f in self.food
-                     if WALL_MARGIN <= f.pos.x <= width - WALL_MARGIN]
+        # food outside the new bounds must go, and not just sideways: a
+        # piece below the shrunken floor is invisible yet still counts
+        # toward MAX_PIECES, silently starving the spawn rhythm
+        self.food = [
+            f for f in self.food
+            if WALL_MARGIN <= f.pos.x <= width - WALL_MARGIN
+            and f.pos.y <= self.height - self.floor_height(f.pos.x) - fd.FLOOR_PAD
+        ]
 
     def _rebuild_terrain(self) -> None:
         """Regenerate the dune heightmap for the current tank width."""
@@ -143,11 +149,18 @@ class World:
     def pour_food(self, count: int = POUR_COUNT) -> None:
         """Sprinkle a handful of pieces from the surface (the f key).
 
-        Deliberately ignores MAX_PIECES: the cap throttles the passive
-        rhythm, while a pour is an explicit feeding decision.
+        Deliberately ignores the food cap: the cap throttles the passive
+        rhythm, while a pour is an explicit feeding decision. A narrow
+        tank gets a smaller handful — six pieces in a sliver of water
+        read as one clog at the top.
         """
-        for _ in range(count):
+        for _ in range(max(1, round(count * self.width_ratio))):
             self.food.append(self._spawn_food())
+
+    @property
+    def width_ratio(self) -> float:
+        """Tank width relative to the default: the narrowness factor."""
+        return self.width / WIDTH
 
     def _spawn_food(self) -> fd.Food:
         """A new piece dropping from the surface."""
@@ -248,9 +261,23 @@ class World:
                 alive.append(sunk)
         self.food = alive
         self.ticks_since_spawn += 1
-        if fd.spawn_due(len(self.food), self.ticks_since_spawn):
+        # a narrow tank receives food proportionally slower: the same
+        # rhythm in a sliver of water piles every piece at the top
+        interval = fd.SPAWN_INTERVAL / max(0.2, self.width_ratio)
+        if fd.spawn_due(len(self.food), self.ticks_since_spawn, self.food_cap,
+                        interval):
             self.food.append(self._spawn_food())
             self.ticks_since_spawn = 0
+
+    @property
+    def food_cap(self) -> float:
+        """Passive food cap, scaled by tank area: a small tank holds less.
+
+        The default tank fits MAX_PIECES; a shrunken window is a puddle,
+        and the same three diamonds in it read as a flood.
+        """
+        area = (self.width * self.height) / (WIDTH * HEIGHT)
+        return max(1.0, fd.MAX_PIECES * area)
 
     def _eat(self, cb: CreatureBrain) -> float:
         """Feeding: the bacterium swallows every piece within body reach."""
@@ -261,15 +288,23 @@ class World:
 
         The reach grows with bloat — a stuffed ball hoovers everything
         nearby, which is exactly how it got stuffed in the first place.
+        A eaten piece is replaced by a fresh spawn only while the tank is
+        at or under its cap; above the cap (after a pour, say) eating
+        actually draws the surplus down instead of generating forever.
         """
         ate = False
         radius = EAT_RADIUS + 2.0 * c.bloat
-        for i, f in enumerate(self.food):
+        remaining: list[fd.Food] = []
+        for f in self.food:
             if cr.touch(c.pos, f.pos, radius):
-                self.food[i] = self._spawn_food()
-                c.hunger = meta.fed(c.hunger, f.energy)
                 self.food_eaten += 1
+                c.hunger = meta.fed(c.hunger, f.energy)
                 ate = True
+                if len(self.food) <= self.food_cap:
+                    remaining.append(self._spawn_food())
+            else:
+                remaining.append(f)
+        self.food = remaining
         return rw.food_reward(ate)
 
     def _handle_metabolism(self, c: cr.Creature) -> meta.MetabolicReport:
