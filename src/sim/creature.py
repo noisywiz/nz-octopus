@@ -40,6 +40,7 @@ class Creature:
     hunger: float
     starving: float
     bumping: bool = False
+    bloat: float = 0.0  # 0..1 fullness: overeating swells the body into a ball
     stall_anchor: Vec | None = None  # position STALL_WINDOW ticks ago
     stall_ticks: int = 0  # ticks spent within STALL_RADIUS of stall_anchor
     trail: list[Vec] = field(default_factory=list)
@@ -64,6 +65,14 @@ def weaken(speed: float, starving: float) -> float:
     return speed * (1.0 - 0.6 * starving)
 
 
+BLOAT_SLOWDOWN = 0.92  # a stuffed ball swims at 8% speed: it just hangs there
+
+
+def bloat_reach(creature: Creature) -> float:
+    """Half of the contact distance; the swollen ball pushes neighbors from afar."""
+    return (CONTACT_RADIUS / 2) * (1.0 + 1.2 * creature.bloat)
+
+
 def move(creature: Creature, action: int) -> None:
     """Apply one action: turn smoothly, then swim (or drift, if resting)."""
     if action < N_DIRECTIONS:
@@ -73,6 +82,7 @@ def move(creature: Creature, action: int) -> None:
         speed = REST_DRIFT * creature.starving  # cannot afford to stand still
     else:
         speed = 0.0
+    speed *= 1.0 - BLOAT_SLOWDOWN * creature.bloat  # a ball of food barely moves
     creature.pos = Vec(
         x=creature.pos.x + math.cos(creature.heading) * speed,
         y=creature.pos.y + math.sin(creature.heading) * speed,
@@ -183,22 +193,28 @@ CONTACT_PUSH = 0.4  # max mutual push per tick; head-on pairs settle at
 # overlap = CONTACT_RADIUS * SWIM_SPEED / CONTACT_PUSH = 1.2 (a visible squish)
 
 
-def separate(a: Creature, b: Creature) -> bool:
+def separate(a: Creature, b: Creature, reach_a: float | None = None,
+             reach_b: float | None = None) -> bool:
     """Soft body collision: push both apart in proportion to the overlap.
 
     Purely physical: no heading change and no reward, so the policy can
     neither sense nor cancel it — a body simply cannot overlap a neighbor.
     The push scales with overlap, so a head-on pair squishes to a stop
     instead of vibrating (a fixed push equal to SWIM_SPEED would cancel
-    the approach exactly and freeze them nose-to-nose).
+    the approach exactly and freeze them nose-to-nose). Reaches default
+    to the normal body size; a bloated ball passes its inflated reach so
+    neighbors bounce off the ball, not its former silhouette.
     """
+    ra = bloat_reach(a) if reach_a is None else reach_a
+    rb = bloat_reach(b) if reach_b is None else reach_b
     dx, dy = b.pos.x - a.pos.x, b.pos.y - a.pos.y
     d = math.hypot(dx, dy)
-    if d >= CONTACT_RADIUS:
+    limit = ra + rb
+    if d >= limit:
         return False
     if d < 1e-6:  # exactly on top of each other: part along +x
         dx, dy, d = 1.0, 0.0, 1.0
-    push = CONTACT_PUSH * (CONTACT_RADIUS - d) / CONTACT_RADIUS
+    push = CONTACT_PUSH * (limit - d) / limit
     ux, uy = dx / d, dy / d
     a.pos = Vec(a.pos.x - ux * push, a.pos.y - uy * push)
     b.pos = Vec(b.pos.x + ux * push, b.pos.y + uy * push)

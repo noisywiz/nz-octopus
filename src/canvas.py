@@ -30,6 +30,7 @@ WATER_BOTTOM = (24, 60, 96)
 FOOD_COLOR = (196, 92, 224)
 FOOD_GLOW = (196, 92, 224, 40)
 CONJUGATION_COLOR = (255, 214, 90)
+STUFFED = (255, 170, 190)  # rosy tint a bloated ball blushes toward
 TEXT = (200, 210, 230)
 
 SCREEN = (int(WIDTH * SCALE), int(HEIGHT * SCALE))
@@ -51,6 +52,12 @@ def mood_palette_hunger(hunger: float, starving: float) -> Palette:
 def mood_palette(world: World) -> Palette:
     """Color of the first creature (kept for single-creature callers)."""
     return mood_palette_hunger(world.hunger, world.starving)
+
+
+def stuffed_palette(palette: Palette, bloat: float) -> Palette:
+    """Blend the mood palette toward a rosy stuffed color as bloat grows."""
+    k = 0.55 * bloat
+    return tuple(lerp_color(col, STUFFED, k) for col in palette)  # type: ignore[return-value]
 
 
 def lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
@@ -89,10 +96,13 @@ def draw_trail(screen: pygame.Surface, trail: list[Vec],
 
 
 def body_spine(center: tuple[float, float], heading: float, bend: float,
-              segments: int) -> list[tuple[float, float]]:
-    """Spine points from nose to tail-end, bowed by the bend angle."""
+              segments: int, bloat: float = 0.0) -> list[tuple[float, float]]:
+    """Spine points from nose to tail-end, bowed by the bend angle.
+
+    Bloat shortens the spine: the discs pile up and the body reads as a ball.
+    """
     ax, ay = center
-    half_length = int(1.1 * SCALE / PIX)
+    half_length = int(1.1 * SCALE / PIX * (1.0 - 0.75 * bloat))
     points: list[tuple[float, float]] = []
     for s in range(segments + 1):
         u = s / segments
@@ -104,12 +114,19 @@ def body_spine(center: tuple[float, float], heading: float, bend: float,
 
 
 def draw_body(art: pygame.Surface, center: tuple[float, float],
-              heading: float, bend: float, palette: Palette) -> None:
-    """Soft body: discs along a bowed spine, dark rear rim, eyes at the nose."""
+              heading: float, bend: float, palette: Palette,
+              bloat: float = 0.0) -> None:
+    """Soft body: discs along a bowed spine, dark rear rim, eyes at the nose.
+
+    Bloat fattens every disc and shortens the spine, so a stuffed creature
+    swells into a near-sphere while keeping its eyes and rear rim.
+    """
     body_c, body_dark, _, _ = palette
     segments = 6
-    radius = 5
-    spine = body_spine(center, heading, bend, segments)
+    radius = 5 + 4 * bloat
+    # a stuffed ball goes jelly-like: half transparent at full bloat
+    alpha = int(255 * (1.0 - 0.5 * bloat))
+    spine = body_spine(center, heading, bend, segments, bloat)
 
     def disc(cx: float, cy: float, r: float,
              color: tuple[int, ...]) -> None:
@@ -121,21 +138,22 @@ def draw_body(art: pygame.Surface, center: tuple[float, float],
 
     for i, (sx, sy) in enumerate(spine):
         u = i / segments
-        rr = radius if u <= 0.5 else max(3, radius - int((u - 0.5) * 6))  # teardrop tail end
-        disc(sx, sy, rr, (*body_c, 255))
+        # teardrop tail end; bloat keeps the rear fat so the shape stays round
+        rr = radius if u <= 0.5 else max(radius * 0.6, radius - int((u - 0.5) * 6))
+        disc(sx, sy, rr, (*body_c, alpha))
     for i in range(segments // 2, segments + 1):  # darker rim on the rear half
         u = i / segments
-        rr = max(3, radius - int((u - 0.5) * 6)) if u > 0.5 else radius
+        rr = max(radius * 0.6, radius - int((u - 0.5) * 6)) if u > 0.5 else radius
         sx, sy = spine[i]
         h = heading - bend * u
         disc(sx + math.sin(h) * rr * 0.6, sy - math.cos(h) * rr * 0.6,
-             1.2, (*body_dark, 255))
+             1.2, (*body_dark, alpha))
 
     nx, ny = spine[0]  # eyes ride the nose, not the body center
     perp = heading + math.pi / 2
     for sign in (-1, 1):
-        ex = nx + math.cos(perp) * sign * 2
-        ey = ny + math.sin(perp) * sign * 2
+        ex = nx + math.cos(perp) * sign * radius * 0.4
+        ey = ny + math.sin(perp) * sign * radius * 0.4
         disc(ex, ey, 1.6, (255, 255, 255, 255))
         disc(ex + math.cos(heading) * 0.8, ey + math.sin(heading) * 0.8,
              0.8, (20, 20, 30, 255))
@@ -143,18 +161,21 @@ def draw_body(art: pygame.Surface, center: tuple[float, float],
 
 def draw_flagellum(art: pygame.Surface, center: tuple[float, float],
                    heading: float, t: float, speed: float, bend: float,
-                   tail_color: tuple[int, int, int]) -> None:
+                   tail_color: tuple[int, int, int],
+                   bloat: float = 0.0) -> None:
     """Swimming-flagellum beat: one slow travelling wave along the tail.
 
     A real flagellum sends a single low-frequency wave from base to tip;
     fast small ripples read as vibration, not swimming. The wave here is
     slow (~1.2 Hz at full speed), the root barely moves, and the bend
     grows smoothly toward the tip. The root follows the body's tail-end
-    bend, so tail and body stay connected when the body bows.
+    bend, so tail and body stay connected when the body bows. Bloat
+    withers the tail: a stuffed ball is too heavy to whip it around.
     """
     ax, ay = center
-    body_edge = int(1.1 * SCALE / PIX) + 3
-    tail_len = int(3.2 * SCALE / PIX)
+    body_edge = int(1.1 * SCALE / PIX * (1.0 - 0.75 * bloat)) + 3
+    tail_len = int(3.2 * SCALE / PIX * (1.0 - 0.6 * bloat))
+    tail_alpha = int(255 * (1.0 - 0.5 * bloat))
     phase = t * 7.5 * min(1.0, max(0.15, speed))  # ~1.2 Hz at full swim
     root_heading = heading - bend  # the tail grows out of the bowed rear
 
@@ -162,7 +183,7 @@ def draw_flagellum(art: pygame.Surface, center: tuple[float, float],
         for yy in range(int(py) - r, int(py) + r + 1):
             for xx in range(int(px) - r, int(px) + r + 1):
                 if 0 <= xx < ART_SIZE and 0 <= yy < ART_SIZE:
-                    art.set_at((xx, yy), (*tail_color, 255))
+                    art.set_at((xx, yy), (*tail_color, tail_alpha))
 
     for i in range(tail_len):
         u = i / tail_len
@@ -193,8 +214,12 @@ def draw_bacterium(screen: pygame.Surface, world: World, t: float,
     state, so the body glides and bows instead of snapping every tick.
     """
     creature = cb.body
-    palette = mood_palette_hunger(creature.hunger, creature.starving)
+    palette = stuffed_palette(
+        mood_palette_hunger(creature.hunger, creature.starving), creature.bloat,
+    )
     x, y = anim.pos.x * SCALE, anim.pos.y * SCALE
+    # a stuffed ball bobs gently: it is lighter than water and just hangs there
+    y += math.sin(t * 0.9 + anim.heading) * 2.5 * creature.bloat
     heading = anim.heading
 
     draw_trail(screen, creature.trail, palette[0])
@@ -202,8 +227,8 @@ def draw_bacterium(screen: pygame.Surface, world: World, t: float,
     art = pygame.Surface((ART_SIZE, ART_SIZE), pygame.SRCALPHA)
     center = (ART_SIZE / 2, ART_SIZE / 2)
     draw_flagellum(art, center, heading, t, creature_speed(creature),
-                   anim.bend, palette[2])
-    draw_body(art, center, heading, anim.bend, palette)
+                   anim.bend, palette[2], creature.bloat)
+    draw_body(art, center, heading, anim.bend, palette, creature.bloat)
 
     big = pygame.transform.scale(art, (ART_SIZE * PIX, ART_SIZE * PIX))
     screen.blit(big, (round(x - big.get_width() / 2),

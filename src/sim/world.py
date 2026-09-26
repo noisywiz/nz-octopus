@@ -221,10 +221,13 @@ class World:
         Runs after every creature has moved: separation is symmetric, so
         both bodies of a pair must already be at their final positions.
         A push can shove a body past a wall, hence the re-clamp afterwards.
+        Reaches come from the bodies themselves, so a bloated ball shoves
+        neighbors with its inflated silhouette.
         """
         for i, a in enumerate(self.creatures):
             for b in self.creatures[i + 1:]:
-                touching = cr.separate(a.body, b.body)
+                touching = cr.separate(a.body, b.body,
+                                       cr.bloat_reach(a.body), cr.bloat_reach(b.body))
                 key = (a.brain.id, b.brain.id)
                 if touching:
                     conjugate(a.brain, b.brain)
@@ -254,10 +257,15 @@ class World:
         return self._contact_eating(cb.body)
 
     def _contact_eating(self, c: cr.Creature) -> float:
-        """Bacterium: eat every piece within body reach."""
+        """Bacterium: eat every piece within body reach.
+
+        The reach grows with bloat — a stuffed ball hoovers everything
+        nearby, which is exactly how it got stuffed in the first place.
+        """
         ate = False
+        radius = EAT_RADIUS + 2.0 * c.bloat
         for i, f in enumerate(self.food):
-            if cr.touch(c.pos, f.pos, EAT_RADIUS):
+            if cr.touch(c.pos, f.pos, radius):
                 self.food[i] = self._spawn_food()
                 c.hunger = meta.fed(c.hunger, f.energy)
                 self.food_eaten += 1
@@ -265,14 +273,15 @@ class World:
         return rw.food_reward(ate)
 
     def _handle_metabolism(self, c: cr.Creature) -> meta.MetabolicReport:
-        """Grow hunger, track weakness, penalize crossing the starve threshold."""
+        """Grow hunger, track weakness, swell into a ball after a feast."""
         before = c.hunger
         c.hunger = meta.grown(before)
         c.starving = meta.starving_factor(c.hunger)
+        c.bloat = meta.ease_bloat(c.bloat, meta.bloat_target(c.hunger))
         event = meta.crosses_starve(before, c.hunger)
         if event:
             self.starvations += 1
-        return meta.metabolize(before, event)
+        return meta.metabolize(before, event, c.bloat)
 
     def _remember(self, reward: float) -> None:
         """Keep the rolling reward window bounded."""
