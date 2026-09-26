@@ -363,7 +363,21 @@ def run(world: World, speed: int) -> None:
                                 terrain=world.terrain)
         return backdrop, weeds, floor_y
 
-    backdrop, weeds, floor_y = build_scenery()
+    backdrop: pygame.Surface
+    weeds: list[aqua.Weed]
+    floor_y: int
+
+    def fit_world_to_screen() -> None:
+        """Resize the tank to the actual window and rebuild scenery.
+        Needed beyond resize events: a window opened at desktop size
+        fires no VIDEORESIZE/WINDOWRESIZED on Windows, which used to
+        leave the tank small in the top-left corner."""
+        nonlocal backdrop, weeds, floor_y
+        w, h = screen.get_size()
+        world.resize(max(1.0, w / SCALE), max(1.0, h / SCALE))
+        backdrop, weeds, floor_y = build_scenery()
+
+    fit_world_to_screen()
     rng = random.Random()
     bubbles: list[aqua.Bubble] = []
     animators: dict[int, Animator] = {}
@@ -374,7 +388,6 @@ def run(world: World, speed: int) -> None:
     try:
         while running:
             t += 1.0 / FPS
-            scenery_dirty = False
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -382,6 +395,7 @@ def run(world: World, speed: int) -> None:
                     if event.key == pygame.K_F11:
                         fullscreen = not fullscreen
                         screen = set_display(fullscreen)
+                        fit_world_to_screen()
                     elif event.key == pygame.K_f:
                         world.pour_food()
                     elif event.key == pygame.K_s:
@@ -391,17 +405,10 @@ def run(world: World, speed: int) -> None:
                 elif event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
                     # the tank itself follows the window at a fixed zoom:
                     # more screen means more water, not a stretched picture
-                    if event.type == pygame.WINDOWRESIZED:
-                        ew, eh = event.x, event.y  # window events use x/y
-                    else:
-                        ew, eh = event.w, event.h  # legacy VIDEORESIZE uses w/h
-                    world.resize(max(1.0, ew / SCALE), max(1.0, eh / SCALE))
-                    scenery_dirty = True
+                    fit_world_to_screen()
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     wx, wy = screen_to_world(*event.pos)
                     world.spawn_at(wx, wy)
-            if scenery_dirty:
-                backdrop, weeds, floor_y = build_scenery()
             win_w, win_h = screen.get_size()
             if not paused:
                 for _ in range(speed):
