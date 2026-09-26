@@ -308,11 +308,17 @@ def draw_stats(screen: pygame.Surface, font: pygame.font.Font,
 def set_display(fullscreen: bool) -> pygame.Surface:
     """(Re)create the display. The window is freely resizable (maximize
     button works); on every resize the world itself grows or shrinks to
-    match at the same zoom, so the tank always fills the window."""
-    flags = pygame.RESIZABLE
+    match at the same zoom, so the tank always fills the window.
+
+    "Fullscreen" here is a maximized window, not macOS true fullscreen:
+    SDL's FULLSCREEN hides the traffic lights and menu bar, and users
+    read that as the app having no window controls at all. A window
+    sized to the desktop keeps the buttons visible and the dock usable.
+    """
     if fullscreen:
-        flags |= pygame.FULLSCREEN
-    return pygame.display.set_mode(SCREEN, flags)
+        w, h = pygame.display.get_desktop_sizes()[0]
+        return pygame.display.set_mode((w, h), pygame.RESIZABLE)
+    return pygame.display.set_mode(SCREEN, pygame.RESIZABLE)
 
 
 def handle_key(key: int, speed: int, paused: bool) -> tuple[int, bool, bool]:
@@ -341,7 +347,7 @@ def floor_y_for(world: World) -> int:
 def run(world: World, speed: int) -> None:
     """Main pygame loop: events, sim ticks, render, repeat."""
     pygame.init()
-    fullscreen = False
+    fullscreen = True  # the tank opens edge-to-edge; F11 toggles back to a window
     screen = set_display(fullscreen)
     pygame.display.set_caption("nz-octopus")
     clock = pygame.time.Clock()
