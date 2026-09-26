@@ -136,11 +136,46 @@ def test_canvas_render() -> None:
         pygame.quit()
 
 
+def test_spawn_ids_stay_unique() -> None:
+    """A viewer-built world: loaded brain id 0, next_id still at default 0."""
+    brain = make_brain()
+    brain.id = 0
+    w = make_world([CreatureBrain(
+        body=Creature(pos=Vec(40.0, 15.0), heading=0.0,
+                      hunger=30.0, starving=0.0),
+        brain=brain,
+    )])
+    spawned = w.spawn_at(40.0, 15.0)
+    assert spawned.brain.id != w.creatures[0].brain.id, \
+        "spawned brain must not reuse the loaded id"
+    assert w.next_id > spawned.brain.id
+    print(f"spawn ids: ok (loaded=0, spawned={spawned.brain.id}, next={w.next_id})")
+
+
+def test_duplicate_loaded_ids_renumbered() -> None:
+    """A save written before the fix holds duplicate ids; World must heal it."""
+    brains = [make_brain(), make_brain(), make_brain()]
+    brains[0].id = 0
+    brains[1].id = 0  # the corrupted first spawn
+    brains[2].id = 1  # collides with the renumbered duplicate
+    w = make_world([
+        CreatureBrain(body=Creature(pos=Vec(10.0, 10.0), heading=0.0,
+                                    hunger=30.0, starving=0.0), brain=b)
+        for b in brains
+    ])
+    ids = [cb.brain.id for cb in w.creatures]
+    assert len(set(ids)) == len(ids), f"ids must be unique, got {ids}"
+    assert w.next_id > max(ids)
+    print(f"duplicate ids: ok (renumbered to {ids}, next={w.next_id})")
+
+
 if __name__ == "__main__":
     test_separate_pushes_apart()
     test_separate_exact_overlap()
     test_conjugate_blends_known_cells_only()
     test_world_contact_and_conjugation()
     test_single_creature_regression()
+    test_spawn_ids_stay_unique()
+    test_duplicate_loaded_ids_renumbered()
     test_canvas_render()
     print("ALL OK")

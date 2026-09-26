@@ -68,6 +68,24 @@ class World:
                 cr.Vec(WIDTH / 2, HEIGHT / 2),
                 octopus=self.octopus,
             ))
+        self._adopt_ids()
+
+    def _adopt_ids(self) -> None:
+        """Make creature ids unique and move next_id past all of them.
+
+        Viewers build creatures from brains loaded off disk, but next_id
+        starts at 0 — the first spawned creature then reused id 0, and
+        two bodies shared one animator (the veteran visually jumped to
+        the spawn point). Saves written before this fix hold duplicate
+        ids; colliding brains are renumbered here. An id carries no
+        learned content, so renumbering is safe anytime.
+        """
+        seen: set[int] = set()
+        for cb in self.creatures:
+            if cb.brain.id in seen:
+                cb.brain.id = self.next_id
+            seen.add(cb.brain.id)
+            self.next_id = max(self.next_id, cb.brain.id + 1)
 
     # --- construction helpers -------------------------------------------------
 
